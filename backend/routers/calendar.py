@@ -203,8 +203,8 @@ def distribute_week(
 def get_mondays_in_month(year: int, month: int) -> list[date]:
     first_day = date(year, month, 1)
     last_day  = date(year, month, cal_module.monthrange(year, month)[1])
-    days_until_monday = (7 - first_day.weekday()) % 7
-    first_monday = first_day + timedelta(days=days_until_monday)
+    # Start from the Monday of the week containing the 1st — even if in the previous month
+    first_monday = first_day - timedelta(days=first_day.weekday())
     mondays = []
     current = first_monday
     while current <= last_day:
