@@ -69,7 +69,6 @@ export default function Absences() {
   }
 
   const remove = async (id) => {
-    if (!confirm('Remove this absence entry?')) return
     await api.deleteAbsence(id)
     load()
   }
