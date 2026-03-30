@@ -10,10 +10,10 @@ def round_half(val: float) -> float:
     return round(val * 2) / 2
 
 
-def fetch_all():
+def fetch_all(week_number: int):
     people = supabase.table("people").select("*, person_schedule(day_of_week, hours)").eq("active", True).execute().data
     tasks = supabase.table("tasks").select("*").execute().data
-    assignments = supabase.table("task_people").select("task_id, person_id").execute().data
+    assignments = supabase.table("task_people").select("task_id, person_id").eq("week_number", week_number).execute().data
     fixed = supabase.table("task_fixed_hours").select("task_id, person_id, hours").execute().data
     return people, tasks, assignments, fixed
 
@@ -112,8 +112,11 @@ def iterative_solve(task_needs, task_auto_pids, person_caps):
     return result, remaining_cap, remaining_need
 
 
-def compute_preview(week_type: str):
-    people, tasks, assignments, fixed_rows = fetch_all()
+def compute_preview(week_number: int):
+    people, tasks, assignments, fixed_rows = fetch_all(week_number)
+
+    # Map week_number to legacy week_scope filter value
+    week_scope_filter = "W1" if week_number == 1 else "W234"
 
     person_map = {p["id"]: p for p in people}
 
@@ -133,7 +136,7 @@ def compute_preview(week_type: str):
     fill_tasks = []
     for t in tasks:
         scope = t.get("week_scope", "both")
-        if scope != "both" and scope != week_type:
+        if scope != "both" and scope != week_scope_filter:
             continue
         if t.get("is_fill"):
             fill_tasks.append(t)
@@ -145,9 +148,11 @@ def compute_preview(week_type: str):
     task_fixed_totals = defaultdict(float)  # task_id -> hours from fixed
 
     for (tid, pid), hrs in fixed_map.items():
-        # Only count fixed for tasks that are in scope
+        # Only count fixed for tasks in scope AND person assigned this week
         task = next((t for t in normal_tasks if t["id"] == tid), None)
         if task is None:
+            continue
+        if pid not in task_assigned.get(tid, set()):
             continue
         fixed_allocated[pid] += hrs
         task_fixed_totals[tid] += hrs
@@ -267,7 +272,7 @@ def compute_preview(week_type: str):
         })
 
     return {
-        "week_type": week_type,
+        "week_number": week_number,
         "tasks": result_tasks,
         "person_summary": person_summary,
         "warnings": warnings,
@@ -275,13 +280,13 @@ def compute_preview(week_type: str):
 
 
 @router.get("/preview")
-def preview_distribution(week_type: str = "W1"):
-    return compute_preview(week_type)
+def preview_distribution(week_number: int = 1):
+    return compute_preview(week_number)
 
 
 @router.post("/confirm")
 def confirm_distribution(body: DistributeRequest):
-    preview = compute_preview(body.week_type)
+    preview = compute_preview(body.week_number)
 
     override_map = {}
     if body.overrides:
@@ -298,15 +303,15 @@ def confirm_distribution(body: DistributeRequest):
                 rows.append({
                     "person_id": pid,
                     "task_id": tid,
-                    "week_type": body.week_type,
+                    "week_number": body.week_number,
                     "hours_per_week": hrs,
                 })
 
     if not rows:
         raise HTTPException(400, "Nothing to save — assign people to tasks first")
 
-    supabase.table("task_distribution").upsert(
-        rows, on_conflict="person_id,task_id,week_type"
-    ).execute()
+    # Delete all existing rows for this week first so removed assignments don't linger
+    supabase.table("task_distribution").delete().eq("week_number", body.week_number).execute()
+    supabase.table("task_distribution").insert(rows).execute()
 
-    return {"saved": len(rows), "week_type": body.week_type}
+    return {"saved": len(rows), "week_number": body.week_number}

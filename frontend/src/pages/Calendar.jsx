@@ -67,11 +67,6 @@ function WeekRow({ week }) {
       <div className="bg-gray-50 px-4 py-2 flex items-center justify-between border-b border-gray-200">
         <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
           Week {week.week_number}
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-            week.week_type === 'W1' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-600'
-          }`}>
-            {week.week_type}
-          </span>
           {week.rules_applied
             ? <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">rules</span>
             : <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">proportional</span>
@@ -103,6 +98,11 @@ export default function Calendar() {
   const [fromWeek, setFromWeek] = useState(1)
   const [showRedistribute, setShowRedistribute] = useState(false)
   const [pendingFromWeek, setPendingFromWeek] = useState(1)
+  const [weekStart, setWeekStart] = useState(() => {
+    const now = new Date()
+    const key = `week_start_${now.getFullYear()}_${now.getMonth() + 1}`
+    return parseInt(localStorage.getItem(key) || '1', 10)
+  })
 
   useEffect(() => {
     api.getPeople().then(all => {
@@ -113,15 +113,25 @@ export default function Calendar() {
   }, [])
 
   useEffect(() => {
+    const stored = parseInt(localStorage.getItem(`week_start_${year}_${month}`) || '1', 10)
+    setWeekStart(stored)
+  }, [year, month])
+
+  useEffect(() => {
     if (!personId) return
     setLoading(true)
     setError(null)
     setCalData(null)
-    api.getCalendar(year, month, personId, fromWeek)
+    api.getCalendar(year, month, personId, fromWeek, weekStart)
       .then(setCalData)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [year, month, personId, fromWeek])
+  }, [year, month, personId, fromWeek, weekStart])
+
+  function changeWeekStart(w) {
+    localStorage.setItem(`week_start_${year}_${month}`, String(w))
+    setWeekStart(w)
+  }
 
   function prevMonth() {
     if (month === 1) { setYear(y => y - 1); setMonth(12) }
@@ -174,9 +184,34 @@ export default function Calendar() {
           </span>
         )}
 
+        {/* W starts at */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-gray-500 whitespace-nowrap">W starts at:</span>
+          {[1, 2, 3, 4].map(w => (
+            <button
+              key={w}
+              onClick={() => changeWeekStart(w)}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                weekStart === w
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-400'
+              }`}
+            >
+              W{w}
+            </button>
+          ))}
+        </div>
+
+        <a
+          href={api.getCalendarExportUrl(year, month, weekStart)}
+          download
+          className="ml-auto px-3 py-1.5 text-sm font-medium bg-emerald-600 text-white rounded-md hover:bg-emerald-700"
+        >
+          Download Excel
+        </a>
         <button
           onClick={() => { setPendingFromWeek(fromWeek); setShowRedistribute(true) }}
-          className="ml-auto px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+          className="px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
         >
           Redistribute
         </button>

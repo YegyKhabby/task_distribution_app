@@ -131,9 +131,9 @@ def seed():
             print(f"  WARNING: missing id for {person_name} / {task_name}")
             continue
         if w1_hrs > 0:
-            dist_rows.append({"person_id": pid, "task_id": tid, "week_type": "W1",   "hours_per_week": w1_hrs})
+            dist_rows.append({"person_id": pid, "task_id": tid, "week_number": 1, "hours_per_week": w1_hrs})
         if w234_hrs > 0:
-            dist_rows.append({"person_id": pid, "task_id": tid, "week_type": "W234", "hours_per_week": w234_hrs})
+            dist_rows.append({"person_id": pid, "task_id": tid, "week_number": 2, "hours_per_week": w234_hrs})
     sb.table("task_distribution").insert(dist_rows).execute()
     print(f"  Inserted {len(dist_rows)} distribution rows")
 

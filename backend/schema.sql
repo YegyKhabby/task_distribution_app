@@ -34,7 +34,8 @@ create table if not exists task_people (
   id uuid primary key default gen_random_uuid(),
   task_id uuid references tasks(id) on delete cascade,
   person_id uuid references people(id) on delete cascade,
-  unique(task_id, person_id)
+  week_number int not null check (week_number between 1 and 4),
+  unique(task_id, person_id, week_number)
 );
 
 -- Fixed/default hours per person per task (set before auto-distribution)
@@ -51,9 +52,10 @@ create table if not exists task_distribution (
   id uuid primary key default gen_random_uuid(),
   person_id uuid references people(id) on delete cascade,
   task_id uuid references tasks(id) on delete cascade,
-  week_type text not null check (week_type in ('W1', 'W234')),
+  week_number int not null check (week_number between 1 and 4),
   hours_per_week numeric not null default 0,
-  unique(person_id, task_id, week_type)
+  preferred_day int check (preferred_day between 1 and 5),  -- 1=Mon … 5=Fri, NULL = no preference
+  unique(person_id, task_id, week_number)
 );
 
 -- Absences (one row per calendar day)

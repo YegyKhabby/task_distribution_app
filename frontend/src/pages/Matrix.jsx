@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../api'
 
 export default function Matrix() {
-  const [weekType, setWeekType] = useState('W1')
+  const [weekNumber, setWeekNumber] = useState(1)
   const [view, setView] = useState('cards') // 'cards' | 'grid'
   const [dist, setDist] = useState([])
   const [people, setPeople] = useState([])
@@ -21,11 +21,11 @@ export default function Matrix() {
 
   useEffect(() => {
     setLoading(true)
-    api.getDistribution(weekType).then((d) => {
+    api.getDistribution(weekNumber).then((d) => {
       setDist(d)
       setLoading(false)
     })
-  }, [weekType])
+  }, [weekNumber])
 
   // Build lookup: person_id -> task_id -> hours
   const distMap = {}
@@ -43,17 +43,17 @@ export default function Matrix() {
       <div className="flex items-center gap-4 mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Task Matrix</h1>
         <div className="flex gap-1 ml-auto">
-          {['W1', 'W234'].map((wt) => (
+          {[1, 2, 3, 4].map((wn) => (
             <button
-              key={wt}
-              onClick={() => setWeekType(wt)}
+              key={wn}
+              onClick={() => setWeekNumber(wn)}
               className={`px-3 py-1 rounded-md text-sm font-medium border ${
-                weekType === wt
+                weekNumber === wn
                   ? 'bg-indigo-600 text-white border-indigo-600'
                   : 'text-gray-600 border-gray-200 hover:bg-gray-50'
               }`}
             >
-              {wt === 'W1' ? 'Week 1' : 'Week 2–3–4'}
+              Week {wn}
             </button>
           ))}
         </div>

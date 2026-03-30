@@ -1,75 +1,56 @@
 import { useState, useEffect } from 'react'
-import { format, startOfWeek, addWeeks, subWeeks } from 'date-fns'
+import { format } from 'date-fns'
 import { api } from '../api'
 
-function getMonday(d = new Date()) {
-  return startOfWeek(d, { weekStartsOn: 1 })
-}
-
 function fmtDate(d) {
-  return format(d, 'yyyy-MM-dd')
+  return format(new Date(d + 'T12:00:00'), 'MMM d')
 }
 
-function fmtDisplay(d) {
-  return format(new Date(d + 'T12:00:00'), 'MMM d, yyyy')
+function fmtWeekRange(weekStart) {
+  const start = new Date(weekStart + 'T12:00:00')
+  const end = new Date(start.getTime() + 4 * 86400000)
+  return `${format(start, 'MMM d')} – ${format(end, 'MMM d, yyyy')}`
 }
 
 export default function Impact() {
-  const [weekStart, setWeekStart] = useState(getMonday())
+  const today = format(new Date(), 'yyyy-MM-dd')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [people, setPeople] = useState([])
-  const [tasks, setTasks] = useState([])
-  const [redirectForm, setRedirectForm] = useState(null) // { taskId, taskName, absentPersonName, candidates }
-  const [makeupForm, setMakeupForm] = useState(null) // { absentPersonId, absentPersonName }
   const [error, setError] = useState('')
+  const [tasks, setTasks] = useState([])
+  const [selectedPersonId, setSelectedPersonId] = useState(null)
+  const [redirectForm, setRedirectForm] = useState(null)
+  const [makeupForm, setMakeupForm] = useState(null)
 
   useEffect(() => {
-    Promise.all([api.getPeople(), api.getTasks()]).then(([p, t]) => {
-      setPeople(p.filter((x) => x.active))
-      setTasks(t)
-    })
+    api.getTasks().then(setTasks)
   }, [])
 
   const load = async () => {
     setLoading(true)
     setError('')
     try {
-      const res = await api.getImpact(fmtDate(weekStart))
+      const res = await api.getImpactUpcoming(today)
       setData(res)
+      setSelectedPersonId((prev) => {
+        if (prev && res.persons.find((p) => p.person_id === prev)) return prev
+        return res.persons[0]?.person_id ?? null
+      })
     } catch (e) {
       setError(e.message)
     }
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [weekStart])
+  useEffect(() => { load() }, [])
 
-  const prevWeek = () => setWeekStart((w) => subWeeks(w, 1))
-  const nextWeek = () => setWeekStart((w) => addWeeks(w, 1))
-
-  const totalUnallocated = data?.absent_people?.reduce(
-    (s, ap) => s + ap.unallocated_tasks.reduce((ts, t) => ts + t.remaining_unallocated, 0),
-    0
-  ) ?? 0
+  const selectedPerson = data?.persons.find((p) => p.person_id === selectedPersonId)
 
   return (
     <div>
-      {/* Week selector */}
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex items-center gap-3 mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Impact</h1>
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={prevWeek} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600">
-            ←
-          </button>
-          <span className="text-sm font-medium text-gray-800 min-w-48 text-center">
-            {format(weekStart, 'MMM d')} – {format(new Date(weekStart.getTime() + 4 * 86400000), 'MMM d, yyyy')}
-          </span>
-          <button onClick={nextWeek} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-600">
-            →
-          </button>
-        </div>
-        <button onClick={load} className="text-sm text-indigo-600 hover:underline">
+        <button onClick={load} className="ml-auto text-sm text-indigo-600 hover:underline">
           Refresh
         </button>
       </div>
@@ -78,78 +59,57 @@ export default function Impact() {
       {error && <p className="text-red-500">{error}</p>}
 
       {data && !loading && (
-        <>
-          {data.absent_people.length === 0 ? (
-            <div className="text-center py-16 text-gray-400">
-              <p className="text-4xl mb-3">✓</p>
-              <p className="text-lg font-medium">No absences this week</p>
-              <p className="text-sm mt-1">
-                Week type: <strong>{data.week_type}</strong>
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-3 mb-4">
-                <span className="text-sm text-gray-500">Week type: <strong>{data.week_type}</strong></span>
-                {totalUnallocated > 0 && (
-                  <span className="bg-red-100 text-red-700 text-sm font-semibold px-3 py-1 rounded-full">
-                    {totalUnallocated.toFixed(1)} hrs unallocated
+        data.persons.length === 0 ? (
+          <div className="text-center py-16 text-gray-400">
+            <p className="text-4xl mb-3">✓</p>
+            <p className="text-lg font-medium">No upcoming absences</p>
+          </div>
+        ) : (
+          <>
+            {/* Person tabs */}
+            <div className="flex gap-2 flex-wrap mb-6">
+              {data.persons.map((p) => (
+                <button
+                  key={p.person_id}
+                  onClick={() => setSelectedPersonId(p.person_id)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    selectedPersonId === p.person_id
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  {p.person_name}
+                  <span className={`ml-2 text-xs ${selectedPersonId === p.person_id ? 'text-indigo-200' : 'text-gray-400'}`}>
+                    {p.total_absent_days} day{p.total_absent_days !== 1 ? 's' : ''}
                   </span>
-                )}
-              </div>
-
-              {data.absent_people.map((ap) => (
-                <AbsentPersonCard
-                  key={ap.person_id}
-                  ap={ap}
-                  weekStart={fmtDate(weekStart)}
-                  tasks={tasks}
-                  onRedirect={(taskId, taskName, candidates) =>
-                    setRedirectForm({ taskId, taskName, candidates, absentPersonName: ap.person_name })
-                  }
-                  onMakeup={() => setMakeupForm({ absentPersonId: ap.person_id, absentPersonName: ap.person_name })}
-                  onRefresh={load}
-                />
+                </button>
               ))}
-            </>
-          )}
-
-          {/* Confirmed reallocations list */}
-          {data.confirmed_reallocations?.length > 0 && (
-            <div className="mt-6">
-              <h2 className="text-base font-semibold text-gray-700 mb-2">Confirmed Redirects This Week</h2>
-              <div className="space-y-1">
-                {data.confirmed_reallocations.map((r) => (
-                  <div key={r.id} className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm flex items-center gap-3">
-                    <span className="text-green-700 font-medium">{r.covering_person?.name}</span>
-                    <span className="text-gray-500">covers</span>
-                    <span className="font-medium">{r.task?.name}</span>
-                    <span className="text-gray-500">— {r.hours} hrs</span>
-                    {r.redirected_from?.name && (
-                      <span className="text-gray-400 text-xs">(from {r.redirected_from.name})</span>
-                    )}
-                    <span className="ml-auto text-xs text-gray-400">by {r.confirmed_by}</span>
-                    <DeleteReallocationButton id={r.id} onDone={load} />
-                  </div>
-                ))}
-              </div>
             </div>
-          )}
-        </>
+
+            {selectedPerson && (
+              <PersonView
+                person={selectedPerson}
+                tasks={tasks}
+                onRedirect={(taskId, taskName, candidates, weekStart) =>
+                  setRedirectForm({ taskId, taskName, candidates, absentPersonName: selectedPerson.person_name, weekStart })
+                }
+                onMakeup={() => setMakeupForm({ absentPersonId: selectedPerson.person_id, absentPersonName: selectedPerson.person_name })}
+                onRefresh={load}
+              />
+            )}
+          </>
+        )
       )}
 
-      {/* Redirect modal */}
       {redirectForm && (
         <RedirectModal
           {...redirectForm}
-          weekStart={fmtDate(weekStart)}
           tasks={tasks}
           onClose={() => setRedirectForm(null)}
           onDone={() => { setRedirectForm(null); load() }}
         />
       )}
 
-      {/* Makeup modal */}
       {makeupForm && (
         <MakeupModal
           {...makeupForm}
@@ -162,43 +122,97 @@ export default function Impact() {
   )
 }
 
-function AbsentPersonCard({ ap, weekStart, tasks, onRedirect, onMakeup, onRefresh }) {
-  const totalUnallocated = ap.unallocated_tasks.reduce((s, t) => s + t.remaining_unallocated, 0)
+function PersonView({ person, tasks, onRedirect, onMakeup, onRefresh }) {
+  const allDates = person.weeks.flatMap((w) => w.absent_dates).sort()
+  const allReallocations = person.weeks.flatMap((w) =>
+    w.confirmed_reallocations.map((r) => ({ ...r, week_start: w.week_start }))
+  )
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-4 overflow-hidden">
-      <div className="flex items-center gap-4 px-5 py-3 bg-gray-50 border-b border-gray-200">
+    <div>
+      <div className="flex items-center gap-4 mb-4">
         <div>
-          <span className="font-semibold text-gray-900">{ap.person_name}</span>
-          <span className="ml-2 text-sm text-gray-500">
-            out {ap.absent_days} day{ap.absent_days !== 1 ? 's' : ''} this week
-          </span>
+          <h2 className="text-lg font-semibold text-gray-900">{person.person_name}</h2>
+          <p className="text-sm text-gray-500">
+            Absent: {allDates.map(fmtDate).join(', ')}
+          </p>
         </div>
-        {totalUnallocated > 0 ? (
-          <span className="ml-auto text-sm font-semibold text-red-600 bg-red-50 px-3 py-1 rounded-full">
-            {totalUnallocated.toFixed(1)} hrs unallocated
-          </span>
-        ) : (
-          <span className="ml-auto text-sm font-semibold text-green-600 bg-green-50 px-3 py-1 rounded-full">
-            Fully covered
-          </span>
-        )}
         <button
           onClick={onMakeup}
-          className="text-xs text-indigo-600 border border-indigo-200 px-2 py-1 rounded hover:bg-indigo-50"
+          className="ml-auto text-xs text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-50"
         >
           Log Makeup
         </button>
       </div>
 
-      <div className="divide-y divide-gray-100">
-        {ap.unallocated_tasks.map((t) => (
-          <TaskImpactRow
-            key={t.task_id}
-            task={t}
-            onRedirect={() => onRedirect(t.task_id, t.task_name, t.coverage_candidates)}
+      <div className="space-y-4">
+        {person.weeks.map((week) => (
+          <WeekSection
+            key={week.week_start}
+            week={week}
+            onRedirect={(taskId, taskName, candidates) =>
+              onRedirect(taskId, taskName, candidates, week.week_start)
+            }
           />
         ))}
+      </div>
+
+      {allReallocations.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Confirmed Redirects</h3>
+          <div className="space-y-1">
+            {allReallocations.map((r) => (
+              <div key={r.id} className="bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm flex items-center gap-3">
+                <span className="text-green-700 font-medium">{r.covering_person?.name}</span>
+                <span className="text-gray-500">covers</span>
+                <span className="font-medium">{r.task?.name}</span>
+                <span className="text-gray-500">— {r.hours} hrs</span>
+                {r.redirected_from?.name && (
+                  <span className="text-gray-400 text-xs">(from {r.redirected_from.name})</span>
+                )}
+                <span className="text-xs text-gray-400">week {fmtDate(r.week_start)}</span>
+                <span className="ml-auto text-xs text-gray-400">by {r.confirmed_by}</span>
+                <DeleteReallocationButton id={r.id} onDone={onRefresh} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function WeekSection({ week, onRedirect }) {
+  const totalUnallocated = week.unallocated_tasks.reduce((s, t) => s + t.remaining_unallocated, 0)
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+      <div className="flex items-center gap-3 px-5 py-3 bg-gray-50 border-b border-gray-200">
+        <span className="font-medium text-gray-800">{fmtWeekRange(week.week_start)}</span>
+        <span className="text-xs text-gray-400">Week {week.week_number} of month</span>
+        {totalUnallocated > 0 ? (
+          <span className="ml-auto text-xs font-semibold text-red-600 bg-red-50 px-2 py-0.5 rounded-full">
+            {totalUnallocated.toFixed(1)} hrs unallocated
+          </span>
+        ) : (
+          <span className="ml-auto text-xs font-semibold text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+            Fully covered
+          </span>
+        )}
+      </div>
+
+      <div className="divide-y divide-gray-100">
+        {week.unallocated_tasks.length === 0 ? (
+          <p className="px-5 py-3 text-sm text-gray-400">No task assignments this week.</p>
+        ) : (
+          week.unallocated_tasks.map((t) => (
+            <TaskImpactRow
+              key={t.task_id}
+              task={t}
+              onRedirect={() => onRedirect(t.task_id, t.task_name, t.coverage_candidates)}
+            />
+          ))
+        )}
       </div>
     </div>
   )

@@ -8,6 +8,7 @@ const NAV = [
   { to: '/absences', label: 'Absences' },
   { to: '/impact',    label: 'Impact' },
   { to: '/calendar',  label: 'Calendar' },
+  { to: '/daily',     label: 'Daily View' },
 ]
 
 export default function Layout({ children }) {

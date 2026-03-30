@@ -26,6 +26,7 @@ class TaskCreate(BaseModel):
     weekly_hours_target: float = 0
     week_scope: str = "both"  # "both" | "W1" | "W234"
     is_fill: bool = False      # if True: absorbs each person's spare hours after all other tasks
+    responsible_person: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
@@ -35,11 +36,13 @@ class TaskUpdate(BaseModel):
     weekly_hours_target: Optional[float] = None
     week_scope: Optional[str] = None
     is_fill: Optional[bool] = None
+    responsible_person: Optional[str] = None
 
 
 class TaskPersonAssign(BaseModel):
     task_id: str
     person_id: str
+    week_number: int  # 1–4
 
 
 class TaskFixedHours(BaseModel):
@@ -49,10 +52,17 @@ class TaskFixedHours(BaseModel):
 
 
 class DistributeRequest(BaseModel):
-    week_type: Literal["W1", "W234"]
+    week_number: int  # 1–4
     # Optional overrides: list of {person_id, task_id, hours} — used when
     # manager tweaks the preview before confirming
     overrides: Optional[list[dict]] = None
+
+
+class PreferredDayUpdate(BaseModel):
+    task_id: str
+    person_id: str
+    week_number: int  # 1–4
+    preferred_day: Optional[int] = None  # 1–5 or None to clear
 
 
 class AbsenceCreate(BaseModel):

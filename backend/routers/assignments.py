@@ -6,26 +6,28 @@ router = APIRouter(prefix="/assignments", tags=["assignments"])
 
 
 @router.get("")
-def get_assignments(task_id: str = None):
+def get_assignments(task_id: str = None, week_number: int = None):
     q = supabase.table("task_people").select("*, people(id, name), tasks(id, name)")
     if task_id:
         q = q.eq("task_id", task_id)
+    if week_number is not None:
+        q = q.eq("week_number", week_number)
     return q.execute().data
 
 
 @router.post("", status_code=201)
 def assign_person(body: TaskPersonAssign):
     res = supabase.table("task_people").upsert(
-        body.model_dump(), on_conflict="task_id,person_id"
+        body.model_dump(), on_conflict="task_id,person_id,week_number"
     ).execute()
     return res.data[0]
 
 
 @router.delete("")
-def unassign_person(task_id: str, person_id: str):
-    supabase.table("task_people").delete().eq("task_id", task_id).eq("person_id", person_id).execute()
-    # Also remove any fixed hours for this person on this task
-    supabase.table("task_fixed_hours").delete().eq("task_id", task_id).eq("person_id", person_id).execute()
+def unassign_person(task_id: str, person_id: str, week_number: int):
+    supabase.table("task_people").delete().eq("task_id", task_id).eq("person_id", person_id).eq("week_number", week_number).execute()
+    # Also remove the distribution row for this week
+    supabase.table("task_distribution").delete().eq("task_id", task_id).eq("person_id", person_id).eq("week_number", week_number).execute()
 
 
 # ── Fixed hours ──────────────────────────────────────────────────────────────

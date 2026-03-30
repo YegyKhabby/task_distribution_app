@@ -31,30 +31,44 @@ export const api = {
   updateTask: (id, data) => req('PUT', `/tasks/${id}`, data),
   deleteTask: (id) => req('DELETE', `/tasks/${id}`),
 
-  // Assignments
-  getAssignments: (taskId) => req('GET', `/assignments${taskId ? `?task_id=${taskId}` : ''}`),
-  assignPerson: (data) => req('POST', '/assignments', data),
-  unassignPerson: (taskId, personId) => req('DELETE', `/assignments?task_id=${taskId}&person_id=${personId}`),
+  // Assignments (per week)
+  getAssignments: (weekNumber, taskId) => {
+    const parts = []
+    if (weekNumber != null) parts.push(`week_number=${weekNumber}`)
+    if (taskId) parts.push(`task_id=${taskId}`)
+    return req('GET', `/assignments${parts.length ? '?' + parts.join('&') : ''}`)
+  },
+  assignPerson: (data) => req('POST', '/assignments', data),  // data must include week_number
+  unassignPerson: (taskId, personId, weekNumber) => req('DELETE', `/assignments?task_id=${taskId}&person_id=${personId}&week_number=${weekNumber}`),
 
   // Fixed hours
   getFixedHours: (taskId) => req('GET', `/assignments/fixed${taskId ? `?task_id=${taskId}` : ''}`),
   setFixedHours: (data) => req('PUT', '/assignments/fixed', data),
 
   // Distribution (auto)
-  previewDistribution: (weekType) => req('GET', `/distribute/preview?week_type=${weekType}`),
+  previewDistribution: (weekNumber) => req('GET', `/distribute/preview?week_number=${weekNumber}`),
   confirmDistribution: (data) => req('POST', '/distribute/confirm', data),
 
   // Distribution (saved matrix — for Matrix page)
-  getDistribution: (weekType) => req('GET', `/distribution${weekType ? `?week_type=${weekType}` : ''}`),
+  getDistribution: (weekNumber) => req('GET', `/distribution${weekNumber != null ? `?week_number=${weekNumber}` : ''}`),
+
+  // Preferred day pin (per week)
+  setPreferredDay: (taskId, personId, weekNumber, day) => req('PUT', '/distribution/preferred-day', { task_id: taskId, person_id: personId, week_number: weekNumber, preferred_day: day }),
 
   // Absences
-  getAbsences: (personId) => req('GET', `/absences${personId ? `?person_id=${personId}` : ''}`),
+  getAbsences: (personId, fromDate) => {
+    const parts = []
+    if (personId) parts.push(`person_id=${personId}`)
+    if (fromDate) parts.push(`from_date=${fromDate}`)
+    return req('GET', `/absences${parts.length ? '?' + parts.join('&') : ''}`)
+  },
   createAbsence: (data) => req('POST', '/absences', data),
   createAbsenceRange: (data) => req('POST', '/absences/range', data),
   deleteAbsence: (id) => req('DELETE', `/absences/${id}`),
 
   // Impact
   getImpact: (weekStart) => req('GET', `/impact/${weekStart}`),
+  getImpactUpcoming: (fromDate) => req('GET', `/impact/upcoming?from_date=${fromDate}`),
 
   // Reallocations
   getReallocations: (weekStart) => req('GET', `/reallocations${weekStart ? `?week_start_date=${weekStart}` : ''}`),
@@ -62,7 +76,10 @@ export const api = {
   deleteReallocation: (id) => req('DELETE', `/reallocations/${id}`),
 
   // Calendar
-  getCalendar: (year, month, personId, fromWeek = 1) => req('GET', `/calendar/${year}/${month}?person_id=${personId}&from_week=${fromWeek}`),
+  getCalendar: (year, month, personId, fromWeek = 1, weekStart = 1) => req('GET', `/calendar/${year}/${month}?person_id=${personId}&from_week=${fromWeek}&week_start=${weekStart}`),
+  getCalendarExportUrl: (year, month, weekStart = 1) => `${BASE}/calendar/export?year=${year}&month=${month}&week_start=${weekStart}`,
+  getDayView: (date, weekStart = 1) => req('GET', `/calendar/day?date=${date}&week_start=${weekStart}`),
+  getDayViewExportUrl: (date, weekStart = 1) => `${BASE}/calendar/day/export?date=${date}&week_start=${weekStart}`,
 
   // Makeup
   getMakeup: (personId) => req('GET', `/makeup${personId ? `?person_id=${personId}` : ''}`),

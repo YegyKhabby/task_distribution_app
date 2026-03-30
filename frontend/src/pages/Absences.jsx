@@ -19,7 +19,8 @@ export default function Absences() {
 
   const load = async () => {
     setLoading(true)
-    const [a, p] = await Promise.all([api.getAbsences(), api.getPeople()])
+    const today = format(new Date(), 'yyyy-MM-dd')
+    const [a, p] = await Promise.all([api.getAbsences(null, today), api.getPeople()])
     setAbsences(a)
     setPeople(p.filter((x) => x.active))
     setLoading(false)
@@ -173,7 +174,7 @@ export default function Absences() {
       {loading ? (
         <p className="text-gray-500">Loading…</p>
       ) : grouped.length === 0 ? (
-        <p className="text-gray-400 text-center py-12">No absences recorded.</p>
+        <p className="text-gray-400 text-center py-12">No upcoming absences.</p>
       ) : (
         <div className="space-y-2">
           {grouped.map((g) => (

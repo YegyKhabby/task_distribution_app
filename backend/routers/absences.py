@@ -7,12 +7,13 @@ router = APIRouter(prefix="/absences", tags=["absences"])
 
 
 @router.get("")
-def list_absences(person_id: str = None):
+def list_absences(person_id: str = None, from_date: str = None):
     q = supabase.table("absences").select("*, people(name)").order("date")
     if person_id:
         q = q.eq("person_id", person_id)
-    res = q.execute()
-    return res.data
+    if from_date:
+        q = q.gte("date", from_date)
+    return q.execute().data
 
 
 @router.post("", status_code=201)

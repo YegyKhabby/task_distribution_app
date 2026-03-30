@@ -7,6 +7,7 @@ import Absences from './pages/Absences'
 import Impact from './pages/Impact'
 import Team from './pages/Team'
 import Calendar from './pages/Calendar'
+import DailyView from './pages/DailyView'
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="/absences" element={<Absences />} />
         <Route path="/impact" element={<Impact />} />
         <Route path="/calendar" element={<Calendar />} />
+        <Route path="/daily" element={<DailyView />} />
       </Routes>
     </Layout>
   )
