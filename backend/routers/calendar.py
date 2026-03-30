@@ -319,11 +319,7 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
             if row.get("preferred_day"):
                 preferred[row["task_id"]] = row["preferred_day"]
 
-        week_sched = {
-            d: h for d, h in schedule.items()
-            if (monday + timedelta(days=d - 1)).month == month or monday.month != month
-        }
-        alloc = distribute_week(tasks_list, week_sched, pname, preferred)
+        alloc = distribute_week(tasks_list, schedule, pname, preferred)
 
         for tid, hrs in alloc.get(dow, {}).items():
             if hrs <= 0:
