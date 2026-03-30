@@ -13,7 +13,8 @@ function formatDate(dateStr) {
 }
 
 function DayCell({ day }) {
-  const base = 'flex-1 min-w-0 p-2 min-h-[110px]'
+  const otherMonth = day.is_other_month
+  const base = `flex-1 min-w-0 p-2 min-h-[110px] ${otherMonth ? 'opacity-40' : ''}`
 
   if (!day.is_work_day) {
     return (
@@ -62,11 +63,17 @@ function DayCell({ day }) {
 }
 
 function WeekRow({ week }) {
+  const isOverflow = week.week_index > 4
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
-      <div className="bg-gray-50 px-4 py-2 flex items-center justify-between border-b border-gray-200">
+    <div className={`border rounded-lg overflow-hidden ${isOverflow ? 'border-amber-200' : 'border-gray-200'}`}>
+      <div className={`px-4 py-2 flex items-center justify-between border-b ${isOverflow ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
         <span className="text-sm font-medium text-gray-700 flex items-center gap-2">
-          Week {week.week_number}
+          Week {week.week_index}
+          {isOverflow && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
+              W{week.week_number} schedule
+            </span>
+          )}
           {week.rules_applied
             ? <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">rules</span>
             : <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700 font-medium">proportional</span>

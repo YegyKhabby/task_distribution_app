@@ -719,16 +719,13 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
     weeks   = []
 
     for i, monday in enumerate(mondays):
-        week_number    = ((i + week_start - 1) % 4) + 1
+        week_index     = i + 1                              # sequential: 1, 2, 3, 4, 5 …
+        week_number    = ((i + week_start - 1) % 4) + 1    # rotation:   1–4 (used to look up distributions)
         tasks_for_week = distributions.get(week_number, [])
         task_map       = {t["task_id"]: t for t in tasks_for_week}
 
-        # Only pass days that fall within this month to the distributor
-        week_schedule = {
-            dow: hrs
-            for dow, hrs in schedule.items()
-            if (monday + timedelta(days=dow - 1)).month == month
-        }
+        # Use the full 5-day schedule so cross-month days get allocations too
+        week_schedule = dict(schedule)
 
         if week_number >= from_week:
             allocations = distribute_week(tasks_for_week, week_schedule, person["name"], preferred_days.get(week_number))
@@ -739,15 +736,14 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
         week_total = 0.0
 
         for dow in range(1, 6):
-            actual_date = monday + timedelta(days=dow - 1)
-            if actual_date.month != month:
-                continue
+            actual_date    = monday + timedelta(days=dow - 1)
+            is_other_month = actual_date.month != month
 
             scheduled_hrs = schedule.get(dow, 0.0)
             is_work_day   = scheduled_hrs > 0
             is_absent     = str(actual_date) in absent_dates
 
-            if is_work_day and not is_absent:
+            if is_work_day and not is_absent and not is_other_month:
                 week_total += scheduled_hrs
 
             daily_tasks = []
@@ -769,17 +765,18 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
                 "is_work_day":     is_work_day,
                 "scheduled_hours": scheduled_hrs,
                 "is_absent":       is_absent,
+                "is_other_month":  is_other_month,
                 "tasks":           daily_tasks,
             })
 
-        if days:
-            weeks.append({
-                "week_number":   week_number,
-                "rules_applied": week_number >= from_week,
-                "week_start":    str(monday),
-                "total_hours":   week_total,
-                "days":          days,
-            })
+        weeks.append({
+            "week_index":    week_index,
+            "week_number":   week_number,
+            "rules_applied": week_number >= from_week,
+            "week_start":    str(monday),
+            "total_hours":   week_total,
+            "days":          days,
+        })
 
     return {
         "person_id":    person_id,
