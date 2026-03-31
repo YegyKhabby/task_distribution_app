@@ -672,7 +672,7 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
 
 
 @router.get("/{year}/{month}")
-def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: int = Query(default=1, ge=1, le=5), week_start: int = Query(default=1, ge=1, le=4)):
+def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: int = Query(default=1, ge=1, le=5), week_start: int = Query(default=1, ge=1, le=4), include_overflow: bool = Query(default=False)):
     # Person info
     person_res = supabase.table("people").select("id, name").eq("id", person_id).single().execute()
     person = person_res.data
@@ -712,11 +712,23 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
 
     # Build weeks
     mondays = get_mondays_in_month(year, month)
+
+    # include_overflow: prepend prev month's last Monday as W1 (the "week 5 of prev month" becomes W1 here)
+    if include_overflow and mondays:
+        overflow_monday = mondays[0] - timedelta(weeks=1)
+        # Only include if that Monday's week has workdays in this month
+        if any((overflow_monday + timedelta(days=d)).month == month for d in range(1, 5)):
+            mondays = [overflow_monday] + mondays
+
     weeks   = []
 
     for i, monday in enumerate(mondays):
-        week_index     = i + 1                              # sequential: 1, 2, 3, 4, 5 …
-        week_number    = ((i + week_start - 1) % 4) + 1    # rotation:   1–4 (used to look up distributions)
+        week_index  = i + 1
+        # Overflow week (5th+ when not include_overflow) defaults to W2, not W1
+        if i >= 4 and not include_overflow:
+            week_number = 2
+        else:
+            week_number = ((i + week_start - 1) % 4) + 1
         tasks_for_week = distributions.get(week_number, [])
         task_map       = {t["task_id"]: t for t in tasks_for_week}
 

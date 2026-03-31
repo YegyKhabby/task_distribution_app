@@ -110,6 +110,10 @@ export default function Calendar() {
     const key = `week_start_${now.getFullYear()}_${now.getMonth() + 1}`
     return parseInt(localStorage.getItem(key) || '1', 10)
   })
+  const [includeOverflow, setIncludeOverflow] = useState(() => {
+    const now = new Date()
+    return localStorage.getItem(`cal_overflow_${now.getFullYear()}_${now.getMonth() + 1}`) === 'true'
+  })
 
   useEffect(() => {
     api.getPeople().then(all => {
@@ -120,8 +124,8 @@ export default function Calendar() {
   }, [])
 
   useEffect(() => {
-    const stored = parseInt(localStorage.getItem(`week_start_${year}_${month}`) || '1', 10)
-    setWeekStart(stored)
+    setWeekStart(parseInt(localStorage.getItem(`week_start_${year}_${month}`) || '1', 10))
+    setIncludeOverflow(localStorage.getItem(`cal_overflow_${year}_${month}`) === 'true')
   }, [year, month])
 
   useEffect(() => {
@@ -129,15 +133,21 @@ export default function Calendar() {
     setLoading(true)
     setError(null)
     setCalData(null)
-    api.getCalendar(year, month, personId, fromWeek, weekStart)
+    api.getCalendar(year, month, personId, fromWeek, weekStart, includeOverflow)
       .then(setCalData)
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [year, month, personId, fromWeek, weekStart])
+  }, [year, month, personId, fromWeek, weekStart, includeOverflow])
 
   function changeWeekStart(w) {
     localStorage.setItem(`week_start_${year}_${month}`, String(w))
     setWeekStart(w)
+  }
+
+  function toggleOverflow() {
+    const next = !includeOverflow
+    localStorage.setItem(`cal_overflow_${year}_${month}`, String(next))
+    setIncludeOverflow(next)
   }
 
   function prevMonth() {
@@ -208,6 +218,19 @@ export default function Calendar() {
             </button>
           ))}
         </div>
+
+        {/* Include prev overflow week as W1 */}
+        <button
+          onClick={toggleOverflow}
+          title="Include the last week of the previous month as W1 of this month"
+          className={`px-2.5 py-1 rounded-md text-xs font-semibold border transition-colors whitespace-nowrap ${
+            includeOverflow
+              ? 'bg-amber-500 text-white border-amber-500'
+              : 'bg-white text-gray-600 border-gray-300 hover:border-amber-400'
+          }`}
+        >
+          {includeOverflow ? '← W1 from prev' : '+ prev week as W1'}
+        </button>
 
         <a
           href={api.getCalendarExportUrl(year, month, weekStart)}
