@@ -1,12 +1,14 @@
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from routers import people, tasks, schedule, assignments, distribute, distribution, absences, impact, reallocations, makeup, calendar
 
 app = FastAPI(title="Task Distribution API", version="1.0.0")
 
+app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

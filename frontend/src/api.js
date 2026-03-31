@@ -14,23 +14,39 @@ async function req(method, path, body) {
   return res.json()
 }
 
+// Simple in-memory cache for data that rarely changes within a session
+const _cache = {}
+const TTL = 30_000 // 30 seconds
+
+async function cached(key, fn) {
+  const now = Date.now()
+  if (_cache[key] && now - _cache[key].ts < TTL) return _cache[key].data
+  const data = await fn()
+  _cache[key] = { data, ts: now }
+  return data
+}
+
+function invalidate(...keys) {
+  keys.forEach(k => delete _cache[k])
+}
+
 export const api = {
   // People
-  getPeople: () => req('GET', '/people'),
-  createPerson: (data) => req('POST', '/people', data),
-  updatePerson: (id, data) => req('PUT', `/people/${id}`, data),
-  deletePerson: (id) => req('DELETE', `/people/${id}`),
+  getPeople: () => cached('people', () => req('GET', '/people')),
+  createPerson: (data) => req('POST', '/people', data).then(r => { invalidate('people', 'schedules'); return r }),
+  updatePerson: (id, data) => req('PUT', `/people/${id}`, data).then(r => { invalidate('people'); return r }),
+  deletePerson: (id) => req('DELETE', `/people/${id}`).then(r => { invalidate('people', 'schedules'); return r }),
 
   // Schedule
-  getAllSchedules: () => req('GET', '/schedule'),
+  getAllSchedules: () => cached('schedules', () => req('GET', '/schedule')),
   getSchedule: (personId) => req('GET', `/schedule/${personId}`),
-  saveSchedule: (personId, entries) => req('PUT', `/schedule/${personId}`, entries),
+  saveSchedule: (personId, entries) => req('PUT', `/schedule/${personId}`, entries).then(r => { invalidate('schedules'); return r }),
 
   // Tasks
-  getTasks: () => req('GET', '/tasks'),
-  createTask: (data) => req('POST', '/tasks', data),
-  updateTask: (id, data) => req('PUT', `/tasks/${id}`, data),
-  deleteTask: (id) => req('DELETE', `/tasks/${id}`),
+  getTasks: () => cached('tasks', () => req('GET', '/tasks')),
+  createTask: (data) => req('POST', '/tasks', data).then(r => { invalidate('tasks'); return r }),
+  updateTask: (id, data) => req('PUT', `/tasks/${id}`, data).then(r => { invalidate('tasks'); return r }),
+  deleteTask: (id) => req('DELETE', `/tasks/${id}`).then(r => { invalidate('tasks'); return r }),
 
   // Assignments (per week)
   getAssignments: (weekNumber, taskId) => {
