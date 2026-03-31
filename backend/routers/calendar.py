@@ -267,6 +267,8 @@ DAY_ABBR = ["Mon","Tue","Wed","Thu","Fri"]
 
 def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
     """Shared logic for GET /day and GET /day/export."""
+    from collections import defaultdict
+
     dow = date_obj.weekday() + 1  # 1=Mon … 5=Fri
     monday = date_obj - timedelta(days=date_obj.weekday())
     year, month = date_obj.year, date_obj.month
@@ -277,16 +279,27 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
         i = all_mondays.index(monday)
         wn = ((i + week_start - 1) % 4) + 1
     except ValueError:
-        # monday is outside this month (shouldn't happen with new get_mondays_in_month)
         wn = week_start
 
-    # All active people
+    # ── Bulk queries (4 total) ────────────────────────────────────────────────
     people_res = supabase.table("people").select("id, name").eq("active", True).order("name").execute()
     all_people = people_res.data
 
-    # Absent people for this date
     abs_res = supabase.table("absences").select("person_id").eq("date", str(date_obj)).execute()
     absent_ids = {r["person_id"] for r in abs_res.data}
+
+    bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours").execute().data
+    bulk_dist  = supabase.table("task_distribution").select(
+        "person_id, task_id, hours_per_week, preferred_day, tasks(id, name, color, responsible_person)"
+    ).eq("week_number", wn).execute().data
+
+    sched_by_pid: dict = defaultdict(list)
+    for r in bulk_sched:
+        sched_by_pid[r["person_id"]].append(r)
+
+    dist_by_pid: dict = defaultdict(list)
+    for r in bulk_dist:
+        dist_by_pid[r["person_id"]].append(r)
 
     # Per-person allocations for the day
     # task_id -> {task_name, task_color, responsible_person, people: [{person_name, hours}]}
@@ -296,19 +309,14 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
         pid   = person["id"]
         pname = person["name"]
 
-        sched_res = supabase.table("person_schedule").select("day_of_week, hours").eq("person_id", pid).execute()
-        schedule  = {r["day_of_week"]: r["hours"] for r in sched_res.data if r["hours"] > 0}
+        schedule = {r["day_of_week"]: r["hours"] for r in sched_by_pid[pid] if r["hours"] > 0}
 
         if not schedule.get(dow, 0) or pid in absent_ids:
             continue  # person doesn't work this day or is absent
 
-        dist_res = supabase.table("task_distribution").select(
-            "task_id, hours_per_week, preferred_day, tasks(id, name, color, responsible_person)"
-        ).eq("person_id", pid).eq("week_number", wn).execute()
-
         tasks_list = []
         preferred  = {}
-        for row in dist_res.data:
+        for row in dist_by_pid[pid]:
             tasks_list.append({
                 "task_id":        row["task_id"],
                 "task_name":      row["tasks"]["name"],
@@ -467,29 +475,46 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
 
     all_days = section_a + section_b
 
-    # ── People ───────────────────────────────────────────────────────────────
+    # ── Bulk queries (4 total instead of 3×N) ────────────────────────────────
     people_res = supabase.table("people").select("id, name").eq("active", True).order("name").execute()
     all_people = people_res.data
 
+    bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours").execute().data
+    bulk_dist  = supabase.table("task_distribution").select(
+        "person_id, week_number, task_id, hours_per_week, preferred_day, tasks(id, name, color)"
+    ).execute().data
+    bulk_abs   = supabase.table("absences").select("person_id, date").gte(
+        "date", str(last_monday_prev)
+    ).lte("date", str(cur_last)).execute().data
+
+    # Group by person_id
+    from collections import defaultdict
+    sched_by_pid = defaultdict(list)
+    for r in bulk_sched:
+        sched_by_pid[r["person_id"]].append(r)
+
+    dist_by_pid = defaultdict(list)
+    for r in bulk_dist:
+        dist_by_pid[r["person_id"]].append(r)
+
+    abs_by_pid = defaultdict(set)
+    for r in bulk_abs:
+        abs_by_pid[r["person_id"]].add(r["date"])
+
     # ── Per-person allocations ────────────────────────────────────────────────
-    # day_alloc[pid][date_str] = {task_name: hours} | "absent" | None
     person_alloc:   dict[str, dict] = {}
-    task_color_map: dict[str, str]  = {}  # populated while processing distributions
+    task_color_map: dict[str, str]  = {}
 
     for person in all_people:
         pid   = person["id"]
         pname = person["name"]
 
-        sched_res = supabase.table("person_schedule").select("day_of_week, hours").eq("person_id", pid).execute()
-        schedule  = {r["day_of_week"]: r["hours"] for r in sched_res.data if r["hours"] > 0}
+        schedule = {r["day_of_week"]: r["hours"] for r in sched_by_pid[pid] if r["hours"] > 0}
+        absent   = abs_by_pid[pid]
 
-        dist_res = supabase.table("task_distribution").select(
-            "week_number, task_id, hours_per_week, preferred_day, tasks(id, name, color)"
-        ).eq("person_id", pid).execute()
-
-        distributions:    dict[int, list] = {}
-        preferred_by_wk:  dict[int, dict] = {}
-        for row in dist_res.data:
+        distributions:   dict[int, list] = {}
+        preferred_by_wk: dict[int, dict] = {}
+        for row in dist_by_pid[pid]:
             wn = row["week_number"]
             distributions.setdefault(wn, []).append({
                 "task_id":        row["task_id"],
@@ -499,16 +524,10 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
             })
             if row.get("preferred_day"):
                 preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_day"]
-            # Collect task colours while we're here — avoids a separate query later
             tname = row["tasks"]["name"]
             tc    = (row["tasks"].get("color") or "").lstrip("#")
             if tc and tname not in task_color_map:
                 task_color_map[tname] = tc
-
-        abs_res = supabase.table("absences").select("date").eq("person_id", pid).gte(
-            "date", str(last_monday_prev)
-        ).lte("date", str(cur_last)).execute()
-        absent = {r["date"] for r in abs_res.data}
 
         day_alloc: dict[str, object] = {}
 
