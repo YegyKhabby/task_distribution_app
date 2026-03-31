@@ -22,9 +22,9 @@ function WeeklyTable({ people, scheduleMap }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-50 border-b border-gray-100">
-              <th className="text-left px-5 py-2.5 font-medium text-gray-500 w-36">Person</th>
+              <th className="text-left px-4 py-2 font-medium text-gray-500 w-32">Person</th>
               {DAYS.map(d => (
-                <th key={d.num} className="text-center px-3 py-2.5 font-medium text-gray-500 w-24">{d.label}</th>
+                <th key={d.num} className="text-center px-2 py-2 font-medium text-gray-500 w-20">{d.label}</th>
               ))}
             </tr>
           </thead>
@@ -33,24 +33,24 @@ function WeeklyTable({ people, scheduleMap }) {
               const sched = scheduleMap[p.id] || {}
               return (
                 <tr key={p.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
-                  <td className="px-5 py-3 font-medium text-gray-800 whitespace-nowrap">{p.name}</td>
+                  <td className="px-4 py-1.5 font-medium text-gray-800 whitespace-nowrap">{p.name}</td>
                   {DAYS.map(d => {
                     const entry = sched[d.num]
                     if (!entry) {
                       return (
-                        <td key={d.num} className="px-3 py-3 text-center text-gray-300 text-xs">—</td>
+                        <td key={d.num} className="px-2 py-1.5 text-center text-gray-300 text-xs">—</td>
                       )
                     }
                     const isHome = entry.location === 'home'
                     return (
-                      <td key={d.num} className="px-3 py-3 text-center">
-                        <span className={`inline-flex flex-col items-center gap-0.5 px-2.5 py-1 rounded-lg text-xs font-medium ${
+                      <td key={d.num} className="px-2 py-1.5 text-center">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium ${
                           isHome
                             ? 'bg-teal-50 text-teal-700 ring-1 ring-teal-200'
                             : 'bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200'
                         }`}>
                           <span>{isHome ? 'Home' : 'Office'}</span>
-                          <span className="font-normal opacity-70">{entry.hours}h</span>
+                          <span className="font-normal opacity-60">{entry.hours}h</span>
                         </span>
                       </td>
                     )
