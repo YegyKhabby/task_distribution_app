@@ -77,15 +77,12 @@ export default function Team() {
     setLoading(true)
     const all = await api.getPeople()
     setPeople(all)
-    const active = all.filter(p => p.active)
-    const schedules = await Promise.all(active.map(p => api.getSchedule(p.id)))
+    const allSchedules = await api.getAllSchedules()
     const map = {}
-    active.forEach((p, i) => {
-      map[p.id] = {}
-      for (const row of schedules[i]) {
-        map[p.id][row.day_of_week] = { hours: row.hours, location: row.location || 'office' }
-      }
-    })
+    for (const row of allSchedules) {
+      if (!map[row.person_id]) map[row.person_id] = {}
+      map[row.person_id][row.day_of_week] = { hours: row.hours, location: row.location || 'office' }
+    }
     setScheduleMap(map)
     setLoading(false)
   }

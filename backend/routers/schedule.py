@@ -7,6 +7,13 @@ router = APIRouter(prefix="/schedule", tags=["schedule"])
 DAYS = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri"}
 
 
+@router.get("")
+def get_all_schedules():
+    """Return all schedules for all people in one query."""
+    res = supabase.table("person_schedule").select("*").order("person_id").order("day_of_week").execute()
+    return res.data
+
+
 @router.get("/{person_id}")
 def get_schedule(person_id: str):
     res = supabase.table("person_schedule").select("*").eq("person_id", person_id).order("day_of_week").execute()

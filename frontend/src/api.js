@@ -22,6 +22,7 @@ export const api = {
   deletePerson: (id) => req('DELETE', `/people/${id}`),
 
   // Schedule
+  getAllSchedules: () => req('GET', '/schedule'),
   getSchedule: (personId) => req('GET', `/schedule/${personId}`),
   saveSchedule: (personId, entries) => req('PUT', `/schedule/${personId}`, entries),
 
