@@ -443,6 +443,151 @@ def export_day_excel(date_str: str = Query(..., alias="date"), week_start: int =
     )
 
 
+@router.get("/export-data")
+def get_calendar_export_data(year: int = Query(...), month: int = Query(...), week_start: int = Query(default=1, ge=1, le=4)):
+    """
+    Return pre-computed daily allocations for all active people as JSON.
+    Used by the browser to generate the Excel file client-side.
+    """
+    from collections import defaultdict
+
+    prev_m = month - 1 if month > 1 else 12
+    prev_y = year if month > 1 else year - 1
+    prev_last      = date(prev_y, prev_m, cal_module.monthrange(prev_y, prev_m)[1])
+    last_monday_prev = prev_last - timedelta(days=prev_last.weekday())
+
+    cur_first = date(year, month, 1)
+    cur_last  = date(year, month, cal_module.monthrange(year, month)[1])
+
+    section_a = [last_monday_prev + timedelta(days=i) for i in range(5)]
+    section_b: list[date] = []
+    all_mondays = get_mondays_in_month(year, month)
+    for monday in all_mondays:
+        if monday <= last_monday_prev:
+            continue
+        for dow in range(1, 6):
+            d = monday + timedelta(days=dow - 1)
+            if d.month == month:
+                section_b.append(d)
+
+    # ── Bulk queries ────────────────────────────────────────────────────────
+    people_res = supabase.table("people").select("id, name").eq("active", True).order("name").execute()
+    all_people = people_res.data
+
+    bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours").execute().data
+    bulk_dist  = supabase.table("task_distribution").select(
+        "person_id, week_number, task_id, hours_per_week, preferred_day, tasks(id, name, color)"
+    ).execute().data
+    bulk_abs   = supabase.table("absences").select("person_id, date").gte(
+        "date", str(last_monday_prev)
+    ).lte("date", str(cur_last)).execute().data
+
+    sched_by_pid: dict = defaultdict(list)
+    for r in bulk_sched:
+        sched_by_pid[r["person_id"]].append(r)
+
+    dist_by_pid: dict = defaultdict(list)
+    for r in bulk_dist:
+        dist_by_pid[r["person_id"]].append(r)
+
+    abs_by_pid: dict = defaultdict(set)
+    for r in bulk_abs:
+        abs_by_pid[r["person_id"]].add(r["date"])
+
+    # ── Per-person allocations ───────────────────────────────────────────────
+    person_alloc:   dict = {}
+    task_color_map: dict = {}
+
+    for person in all_people:
+        pid   = person["id"]
+        pname = person["name"]
+        schedule = {r["day_of_week"]: r["hours"] for r in sched_by_pid[pid] if r["hours"] > 0}
+        absent   = abs_by_pid[pid]
+
+        distributions:   dict = {}
+        preferred_by_wk: dict = {}
+        for row in dist_by_pid[pid]:
+            wn = row["week_number"]
+            distributions.setdefault(wn, []).append({
+                "task_id": row["task_id"], "task_name": row["tasks"]["name"],
+                "task_color": row["tasks"].get("color"), "hours_per_week": row["hours_per_week"],
+            })
+            if row.get("preferred_day"):
+                preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_day"]
+            tc = (row["tasks"].get("color") or "").lstrip("#")
+            if tc and row["tasks"]["name"] not in task_color_map:
+                task_color_map[row["tasks"]["name"]] = tc
+
+        day_alloc: dict = {}
+
+        tasks_a = distributions.get(4, [])
+        tmap_a  = {t["task_id"]: t for t in tasks_a}
+        alloc_a = distribute_week(tasks_a, schedule, pname, preferred_by_wk.get(4))
+        for d in section_a:
+            d_str = str(d)
+            dow   = d.weekday() + 1
+            if d_str in absent:
+                day_alloc[d_str] = "absent"
+            elif schedule.get(dow, 0) > 0:
+                day_alloc[d_str] = {tmap_a[tid]["task_name"]: hrs for tid, hrs in alloc_a.get(dow, {}).items() if hrs > 0 and tid in tmap_a}
+            else:
+                day_alloc[d_str] = None
+
+        for i, monday in enumerate(all_mondays):
+            if monday <= last_monday_prev:
+                continue
+            wn      = ((i + week_start - 1) % 4) + 1
+            tasks_w = distributions.get(wn, [])
+            tmap_w  = {t["task_id"]: t for t in tasks_w}
+            week_sched = {dow: hrs for dow, hrs in schedule.items() if (monday + timedelta(days=dow - 1)).month == month}
+            alloc_w = distribute_week(tasks_w, week_sched, pname, preferred_by_wk.get(wn))
+            for dow in range(1, 6):
+                d = monday + timedelta(days=dow - 1)
+                if d.month != month:
+                    continue
+                d_str = str(d)
+                if d_str in absent:
+                    day_alloc[d_str] = "absent"
+                elif schedule.get(dow, 0) > 0:
+                    day_alloc[d_str] = {tmap_w[tid]["task_name"]: hrs for tid, hrs in alloc_w.get(dow, {}).items() if hrs > 0 and tid in tmap_w}
+                else:
+                    day_alloc[d_str] = None
+
+        person_alloc[pid] = day_alloc
+
+    # ── Week group metadata (for frontend column colouring) ──────────────────
+    WK_COLORS = ["3730A3", "1E40AF", "0369A1", "0F766E"]
+    groups_data: list = []
+    if section_a:
+        groups_data.append({"label": "Prev Month", "start_idx": 0, "end_idx": len(section_a) - 1, "color": "6D28D9"})
+    prev_mon = None
+    wk_idx   = 0
+    wk_start_idx = len(section_a)
+    for col_off, d in enumerate(section_b):
+        mon = d - timedelta(days=d.weekday())
+        if mon != prev_mon:
+            if prev_mon is not None:
+                groups_data.append({"label": f"Week {wk_idx}", "start_idx": wk_start_idx, "end_idx": len(section_a) + col_off - 1, "color": WK_COLORS[(wk_idx - 1) % 4]})
+            wk_start_idx = len(section_a) + col_off
+            prev_mon = mon
+            wk_idx  += 1
+    if section_b:
+        groups_data.append({"label": f"Week {wk_idx}", "start_idx": wk_start_idx, "end_idx": len(section_a) + len(section_b) - 1, "color": WK_COLORS[(wk_idx - 1) % 4]})
+
+    return {
+        "year": year,
+        "month": month,
+        "month_name": MONTH_NAMES_LONG[month - 1],
+        "cur_first": str(cur_first),
+        "section_a": [str(d) for d in section_a],
+        "section_b": [str(d) for d in section_b],
+        "groups": groups_data,
+        "people": [{"id": p["id"], "name": p["name"]} for p in all_people],
+        "allocations": {pid: {k: v for k, v in alloc.items()} for pid, alloc in person_alloc.items()},
+        "task_colors": task_color_map,
+    }
+
+
 @router.get("/export")
 def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_start: int = Query(default=1, ge=1, le=4)):
     """

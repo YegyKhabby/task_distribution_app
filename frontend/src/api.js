@@ -95,6 +95,7 @@ export const api = {
   // Calendar
   getCalendar: (year, month, personId, fromWeek = 1, weekStart = 1, includeOverflow = false) => req('GET', `/calendar/${year}/${month}?person_id=${personId}&from_week=${fromWeek}&week_start=${weekStart}&include_overflow=${includeOverflow}`),
   getCalendarExportUrl: (year, month, weekStart = 1) => `${BASE}/calendar/export?year=${year}&month=${month}&week_start=${weekStart}`,
+  getCalendarExportData: (year, month, weekStart = 1) => req('GET', `/calendar/export-data?year=${year}&month=${month}&week_start=${weekStart}`),
   getDayView: (date, weekStart = 1) => req('GET', `/calendar/day?date=${date}&week_start=${weekStart}`),
   getDayViewExportUrl: (date, weekStart = 1) => `${BASE}/calendar/day/export?date=${date}&week_start=${weekStart}`,
 

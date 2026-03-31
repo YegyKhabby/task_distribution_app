@@ -1,5 +1,183 @@
 import { useState, useEffect } from 'react'
+import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+
+const DAY_ABBR = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+
+function lighten(hex6, factor = 0.82) {
+  try {
+    const r = parseInt(hex6.slice(0,2), 16), g = parseInt(hex6.slice(2,4), 16), b = parseInt(hex6.slice(4,6), 16)
+    const to2 = n => Math.round(n + (255-n)*factor).toString(16).padStart(2,'0').toUpperCase()
+    return to2(r)+to2(g)+to2(b)
+  } catch { return 'F3F4F6' }
+}
+
+function sf(rgb) { return { fill: { fgColor: { rgb } } } }
+function fc(rgb, sz=9, bold=false, italic=false) { return { font: { color: { rgb }, sz, bold, italic } } }
+function merge(styles) {
+  const out = {}
+  for (const s of styles) for (const [k,v] of Object.entries(s)) out[k] = (typeof v === 'object' && !Array.isArray(v) && out[k]) ? { ...out[k], ...v } : v
+  return out
+}
+
+function exportCalendarExcel(data) {
+  const { year, month, month_name, cur_first, section_a, section_b, groups, people, allocations, task_colors } = data
+  const all_days = [...section_a, ...section_b]
+  const ncols = 2 + all_days.length
+
+  const WS = {}
+  const merges = []
+  let row = 0
+
+  function setCell(r, c, v, t, s) {
+    WS[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} }
+  }
+
+  // Row 0: Title
+  setCell(row, 0, `${month_name} ${year}`, 's', {
+    fill: { fgColor: { rgb: '312E81' } },
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 14 },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  })
+  merges.push({ s: { r: row, c: 0 }, e: { r: row, c: ncols - 1 } })
+  for (let c = 1; c < ncols; c++) setCell(row, c, '', 's', sf('312E81'))
+  row++
+
+  // Row 1: Week group headers
+  const DAY_H_STYLE = { fill: { fgColor: { rgb: '374151' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } }
+  setCell(row, 0, 'Person', 's', DAY_H_STYLE)
+  setCell(row, 1, 'Task',   's', DAY_H_STYLE)
+  for (const g of groups) {
+    const c1 = 2 + g.start_idx, c2 = 2 + g.end_idx
+    setCell(row, c1, g.label, 's', {
+      fill: { fgColor: { rgb: g.color } },
+      font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    })
+    if (c1 < c2) merges.push({ s: { r: row, c: c1 }, e: { r: row, c: c2 } })
+    for (let c = c1 + 1; c <= c2; c++) setCell(row, c, '', 's', sf(g.color))
+  }
+  row++
+
+  // Row 2: Day headers
+  setCell(row, 0, '', 's', sf('374151'))
+  setCell(row, 1, '', 's', sf('374151'))
+  for (let i = 0; i < all_days.length; i++) {
+    const d = new Date(all_days[i] + 'T00:00:00')
+    const g = groups.find(g => i >= g.start_idx && i <= g.end_idx)
+    const bgColor = g ? g.color : '374151'
+    setCell(row, 2 + i, `${DAY_ABBR[d.getDay() === 0 ? 6 : d.getDay()-1]}  ${d.getDate()}`, 's', {
+      fill: { fgColor: { rgb: bgColor } },
+      font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9 },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    })
+  }
+  row++
+
+  // Data rows
+  for (const person of people) {
+    const pid = person.id
+    const day_alloc = allocations[pid] || {}
+
+    // Collect task names in order
+    const taskNames = [], taskSeen = new Set()
+    for (const d of all_days) {
+      const td = day_alloc[d]
+      if (td && typeof td === 'object') {
+        for (const tname of Object.keys(td)) {
+          if (!taskSeen.has(tname)) { taskNames.push(tname); taskSeen.add(tname) }
+        }
+      }
+    }
+
+    const pStartRow = row
+    const nRows = Math.max(taskNames.length, 1)
+
+    if (taskNames.length === 0) {
+      setCell(row, 0, '', 's', sf('EEF2FF'))
+      setCell(row, 1, '—', 's', sf('F9FAFB'))
+      for (let i = 0; i < all_days.length; i++) setCell(row, 2+i, '', 's', sf('F9FAFB'))
+      row++
+    } else {
+      for (let ti = 0; ti < taskNames.length; ti++) {
+        const tname = taskNames[ti]
+        const tc = task_colors[tname] || ''
+        const taskLight = tc ? lighten(tc, 0.80) : 'F9FAFB'
+        const taskVlt   = tc ? lighten(tc, 0.91) : 'FFFFFF'
+        const tcFont    = tc || '374151'
+
+        setCell(row, 0, '', 's', sf('EEF2FF'))
+        setCell(row, 1, tname, 's', {
+          fill: { fgColor: { rgb: taskLight } },
+          font: { color: { rgb: tcFont }, sz: 9 },
+          alignment: { horizontal: 'left', vertical: 'center' },
+        })
+
+        for (let i = 0; i < all_days.length; i++) {
+          const d = all_days[i]
+          const td = day_alloc[d]
+          const isCurrentMonth = d >= cur_first
+          let cellStyle
+
+          if (td === 'absent') {
+            cellStyle = ti === 0
+              ? merge([sf('FEE2E2'), fc('991B1B', 9, true)])
+              : sf('FEE2E2')
+            setCell(row, 2+i, ti === 0 ? 'ABS' : '', 's', { ...cellStyle, alignment: { horizontal: 'center', vertical: 'center' } })
+          } else if (td && typeof td === 'object' && td[tname] != null) {
+            const bg = isCurrentMonth ? taskVlt : lighten(tc || 'A78BFA', 0.88)
+            setCell(row, 2+i, td[tname], 'n', {
+              fill: { fgColor: { rgb: bg } },
+              font: { color: { rgb: tcFont }, sz: 9 },
+              alignment: { horizontal: 'center', vertical: 'center' },
+            })
+          } else {
+            setCell(row, 2+i, '', 's', sf(isCurrentMonth ? 'F9FAFB' : 'F5F3FF'))
+          }
+        }
+        row++
+      }
+    }
+
+    // Merge person name cell vertically
+    if (nRows > 1) merges.push({ s: { r: pStartRow, c: 0 }, e: { r: pStartRow + nRows - 1, c: 0 } })
+    WS[XLSX.utils.encode_cell({ r: pStartRow, c: 0 })] = {
+      v: person.name, t: 's',
+      s: { fill: { fgColor: { rgb: 'EEF2FF' } }, font: { bold: true, sz: 10, color: { rgb: '312E81' } }, alignment: { horizontal: 'left', vertical: 'top' } },
+    }
+  }
+
+  // Totals row
+  const totRow = row
+  setCell(totRow, 0, 'Total', 's', { fill: { fgColor: { rgb: 'F0FDF4' } }, font: { bold: true, color: { rgb: '166534' } }, alignment: { horizontal: 'left', vertical: 'center' } })
+  setCell(totRow, 1, '', 's', sf('F0FDF4'))
+  for (let i = 0; i < all_days.length; i++) {
+    const d = all_days[i]
+    let total = 0
+    for (const person of people) {
+      const td = (allocations[person.id] || {})[d]
+      if (td && typeof td === 'object') total += Object.values(td).reduce((a,b) => a+b, 0)
+    }
+    setCell(totRow, 2+i, total > 0 ? total : '', total > 0 ? 'n' : 's', {
+      fill: { fgColor: { rgb: 'F0FDF4' } },
+      font: { bold: true, sz: 9, color: { rgb: '166534' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    })
+  }
+
+  WS['!ref'] = XLSX.utils.encode_range({ s: { r:0, c:0 }, e: { r: totRow, c: ncols-1 } })
+  WS['!merges'] = merges
+  WS['!cols'] = [{ wch: 14 }, { wch: 22 }, ...all_days.map(() => ({ wch: 7 }))]
+  WS['!freeze'] = { xSplit: 2, ySplit: 3 }
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, WS, `${month_name} ${year}`.slice(0, 31))
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = `calendar_${year}_${String(month).padStart(2,'0')}_${month_name}.xlsx`; a.click()
+  URL.revokeObjectURL(url)
+}
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -114,6 +292,7 @@ export default function Calendar() {
     const now = new Date()
     return localStorage.getItem(`cal_overflow_${now.getFullYear()}_${now.getMonth() + 1}`) === 'true'
   })
+  const [exporting, setExporting] = useState(false)
 
   useEffect(() => {
     api.getPeople().then(all => {
@@ -232,13 +411,21 @@ export default function Calendar() {
           {includeOverflow ? '← W1 from prev' : '+ prev week as W1'}
         </button>
 
-        <a
-          href={api.getCalendarExportUrl(year, month, weekStart)}
-          download
-          className="ml-auto px-3 py-1.5 text-sm font-medium bg-emerald-600 text-white rounded-md hover:bg-emerald-700"
+        <button
+          onClick={async () => {
+            setExporting(true)
+            try {
+              const data = await api.getCalendarExportData(year, month, weekStart)
+              exportCalendarExcel(data)
+            } finally {
+              setExporting(false)
+            }
+          }}
+          disabled={exporting}
+          className="ml-auto px-3 py-1.5 text-sm font-medium bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-60"
         >
-          Download Excel
-        </a>
+          {exporting ? 'Preparing…' : 'Download Excel'}
+        </button>
         <button
           onClick={() => { setPendingFromWeek(fromWeek); setShowRedistribute(true) }}
           className="px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700"

@@ -1,5 +1,83 @@
 import { useState, useEffect } from 'react'
+import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+function exportDayExcel(data, dateStr) {
+  const d = new Date(dateStr + 'T00:00:00')
+  const label = `${data.day_name} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`
+
+  // Collect unique person names in order of first appearance
+  const personNames = []
+  const seen = new Set()
+  for (const t of data.tasks) {
+    for (const p of t.people) {
+      if (!seen.has(p.person_name)) { personNames.push(p.person_name); seen.add(p.person_name) }
+    }
+  }
+
+  const HDR_BG = '3730A3'
+  const hdrStyle = (bg = HDR_BG) => ({
+    fill: { fgColor: { rgb: bg } },
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  })
+  const boldStyle = { font: { bold: true, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+  const numStyle  = { alignment: { horizontal: 'center', vertical: 'center' }, font: { sz: 10 } }
+
+  const ws = {}
+  const ncols = 2 + personNames.length + 1
+  let row = 0
+
+  // Header row
+  const header = ['Task', 'Responsible', ...personNames, 'Total']
+  header.forEach((v, c) => {
+    ws[XLSX.utils.encode_cell({ r: row, c })] = { v, t: 's', s: hdrStyle() }
+  })
+  row++
+
+  // Task rows
+  for (const t of data.tasks) {
+    const personHours = Object.fromEntries(t.people.map(p => [p.person_name, p.hours]))
+    const colorHex = (t.task_color || '').replace('#', '')
+    const taskCellStyle = colorHex
+      ? { fill: { fgColor: { rgb: colorHex } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { vertical: 'center' } }
+      : { font: { sz: 10 }, alignment: { vertical: 'center' } }
+
+    ws[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: t.task_name, t: 's', s: taskCellStyle }
+    ws[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: t.responsible_person || '—', t: 's', s: numStyle }
+    personNames.forEach((pname, ci) => {
+      const hrs = personHours[pname]
+      if (hrs != null) ws[XLSX.utils.encode_cell({ r: row, c: 2 + ci })] = { v: hrs, t: 'n', s: numStyle }
+    })
+    ws[XLSX.utils.encode_cell({ r: row, c: 2 + personNames.length })] = { v: t.total_hours, t: 'n', s: boldStyle }
+    row++
+  }
+
+  // Absent footer
+  if (data.absent_people && data.absent_people.length > 0) {
+    row++ // blank row
+    ws[XLSX.utils.encode_cell({ r: row, c: 0 })] = {
+      v: `Absent: ${data.absent_people.join(', ')}`,
+      t: 's',
+      s: { font: { italic: true, color: { rgb: '991B1B' }, sz: 10 } },
+    }
+  }
+
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: ncols - 1 } })
+  ws['!cols'] = [{ wch: 26 }, { wch: 15 }, ...personNames.map(() => ({ wch: 10 })), { wch: 8 }]
+  ws['!freeze'] = { xSplit: 2, ySplit: 1 }
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, label.slice(0, 31))
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = `daily_${dateStr}.xlsx`; a.click()
+  URL.revokeObjectURL(url)
+}
 
 function toDateStr(d) {
   const y = d.getFullYear()
@@ -68,13 +146,12 @@ export default function DailyView() {
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-gray-900">Daily View</h1>
         {data && !data.is_weekend && (
-          <a
-            href={api.getDayViewExportUrl(date, weekStartForDate)}
-            download
+          <button
+            onClick={() => exportDayExcel(data, date)}
             className="px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700"
           >
             Download Excel
-          </a>
+          </button>
         )}
       </div>
 
