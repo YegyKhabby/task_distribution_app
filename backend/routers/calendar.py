@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from io import BytesIO
 import calendar as cal_module
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
@@ -557,48 +557,131 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
 
         person_alloc[pid] = day_alloc
 
+    # ── Collect task colour map ───────────────────────────────────────────────
+    task_color_map: dict[str, str] = {}  # task_name -> hex (no #)
+    for person in all_people:
+        pid = person["id"]
+        cr = supabase.table("task_distribution").select("tasks(name, color)").eq("person_id", pid).execute()
+        for row in cr.data:
+            tname = row["tasks"]["name"]
+            tc    = (row["tasks"].get("color") or "").lstrip("#")
+            if tc and tname not in task_color_map:
+                task_color_map[tname] = tc
+
+    def lighten(hex6: str, factor: float = 0.82) -> str:
+        """Blend hex6 toward white by factor."""
+        try:
+            r = int(hex6[0:2], 16); g = int(hex6[2:4], 16); b = int(hex6[4:6], 16)
+            return f"{int(r+(255-r)*factor):02X}{int(g+(255-g)*factor):02X}{int(b+(255-b)*factor):02X}"
+        except Exception:
+            return "F3F4F6"
+
+    # ── Border helpers ────────────────────────────────────────────────────────
+    T  = Side(style="thin",   color="D1D5DB")
+    M  = Side(style="medium", color="6B7280")
+    TK = Side(style="thick",  color="312E81")
+    NO = Side(style=None)
+
+    def bdr(top=T, bot=T, lft=T, rgt=T):
+        return Border(top=top, bottom=bot, left=lft, right=rgt)
+
+    # ── Fill helpers ──────────────────────────────────────────────────────────
+    def sf(c): return PatternFill("solid", fgColor=c)
+
+    TITLE_F  = sf("312E81")
+    PREV_H   = sf("6D28D9")
+    WK_FILLS = [sf("3730A3"), sf("1E40AF"), sf("0369A1"), sf("0F766E")]
+    DAY_H    = sf("374151")
+    NAME_F   = sf("EEF2FF")
+    ABS_F    = sf("FEE2E2")
+    OFF_F    = sf("F9FAFB")
+    TOT_F    = sf("F0FDF4")
+    WHITE_F  = sf("FFFFFF")
+    PREV_D   = sf("F5F3FF")
+
+    ctr  = Alignment(horizontal="center", vertical="center")
+    left = Alignment(horizontal="left",   vertical="center")
+
+    # ── Determine day-column groups ───────────────────────────────────────────
+    # groups: list of (label, col_start, col_end, fill)   (1-based, offset by 2 for A/B)
+    groups: list[tuple] = []
+    if section_a:
+        groups.append(("Prev Month", 3, 3 + len(section_a) - 1, PREV_H))
+    prev_mon = None
+    wk_idx   = 0
+    wk_start_col = 3 + len(section_a)
+    for col_off, d in enumerate(section_b):
+        mon = d - timedelta(days=d.weekday())
+        if mon != prev_mon:
+            if prev_mon is not None:
+                groups.append((f"Week {wk_idx}", wk_start_col, 3 + len(section_a) + col_off - 1, WK_FILLS[(wk_idx - 1) % 4]))
+            wk_start_col = 3 + len(section_a) + col_off
+            prev_mon = mon
+            wk_idx  += 1
+    if section_b:
+        groups.append((f"Week {wk_idx}", wk_start_col, 2 + len(all_days), WK_FILLS[(wk_idx - 1) % 4]))
+
+    ncols = 2 + len(all_days)
+
     # ── Build workbook ────────────────────────────────────────────────────────
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = f"{MONTH_NAMES_LONG[month-1]} {year}"
+    ws.title = f"{MONTH_NAMES_LONG[month-1]} {year}"[:31]
 
-    # Styles
-    HDR_FILL   = PatternFill("solid", fgColor="3730A3")   # dark indigo — header bg
-    PREV_FILL  = PatternFill("solid", fgColor="7C3AED")   # purple — prev-month col headers
-    ABS_FILL   = PatternFill("solid", fgColor="FCA5A5")   # red — absent cells
-    PREV_CELL  = PatternFill("solid", fgColor="EDE9FE")   # very light purple — prev-month data
-    ALT_FILL   = PatternFill("solid", fgColor="F1F5F9")   # light gray — alternating person rows
-    WHITE_FILL = PatternFill("solid", fgColor="FFFFFF")
+    # ── Row 1: Title ──────────────────────────────────────────────────────────
+    ws.append([""] * ncols)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+    c = ws.cell(1, 1)
+    c.value     = f"{MONTH_NAMES_LONG[month-1]} {year}"
+    c.font      = Font(bold=True, color="FFFFFF", size=14)
+    c.fill      = TITLE_F
+    c.alignment = ctr
+    ws.row_dimensions[1].height = 24
 
-    def hdr_font(color="FFFFFF"): return Font(bold=True, color=color)
-    centre = Alignment(horizontal="center", vertical="center")
+    # ── Row 2: Week group headers ─────────────────────────────────────────────
+    ws.append([""] * ncols)
+    ws.cell(2, 1).value = "Person"; ws.cell(2, 1).font = Font(bold=True, color="FFFFFF"); ws.cell(2, 1).fill = DAY_H; ws.cell(2, 1).alignment = left
+    ws.cell(2, 2).value = "Task";   ws.cell(2, 2).font = Font(bold=True, color="FFFFFF"); ws.cell(2, 2).fill = DAY_H; ws.cell(2, 2).alignment = left
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=1)
+    for label, c1, c2, fill in groups:
+        if c1 <= c2:
+            ws.merge_cells(start_row=2, start_column=c1, end_row=2, end_column=c2)
+        cell = ws.cell(2, c1)
+        cell.value     = label
+        cell.font      = Font(bold=True, color="FFFFFF", size=10)
+        cell.fill      = fill
+        cell.alignment = ctr
+    ws.row_dimensions[2].height = 16
 
-    # Header row
-    header = ["Person", "Task"] + [
-        f"{DAY_ABBR[d.weekday()]} {d.day} {MONTH_NAMES_SHORT[d.month-1]}"
-        for d in all_days
-    ]
-    ws.append(header)
+    # ── Row 3: Day headers ────────────────────────────────────────────────────
+    day_hdr_row = ["", ""]
+    for d in all_days:
+        day_hdr_row.append(f"{DAY_ABBR[d.weekday()]}  {d.day}")
+    ws.append(day_hdr_row)
+    for col in range(1, ncols + 1):
+        cell = ws.cell(3, col)
+        cell.font      = Font(bold=True, color="FFFFFF", size=9)
+        cell.fill      = DAY_H if col <= 2 else ([g[3] for g in groups if g[1] <= col <= g[2]] or [DAY_H])[0]
+        cell.alignment = ctr
+        cell.border    = bdr()
+    ws.row_dimensions[3].height = 15
 
-    for col in range(1, len(header) + 1):
-        cell = ws.cell(row=1, column=col)
-        cell.font      = hdr_font()
-        cell.fill      = HDR_FILL
-        cell.alignment = centre
+    # Thick left border at start of current-month columns
+    first_cur_col = next((3 + i for i, d in enumerate(all_days) if d >= cur_first), None)
+    if first_cur_col:
+        for r in range(2, 4):
+            cell = ws.cell(r, first_cur_col)
+            cell.border = Border(top=cell.border.top, bottom=cell.border.bottom,
+                                 left=TK, right=cell.border.right)
 
-    # Purple tint on section-A date headers
-    for col_offset, d in enumerate(all_days):
-        if d < cur_first:
-            ws.cell(row=1, column=3 + col_offset).fill = PREV_FILL
+    # ── Data rows ─────────────────────────────────────────────────────────────
+    ROW_START = 4
+    row_num   = ROW_START
 
-    # Data rows
-    row_num = 2
-    for p_idx, person in enumerate(all_people):
+    for person in all_people:
         pid       = person["id"]
         pname     = person["name"]
         day_alloc = person_alloc[pid]
-        row_fill  = ALT_FILL if p_idx % 2 else WHITE_FILL
-        prev_data = PatternFill("solid", fgColor="EDE9FE") if p_idx % 2 else PatternFill("solid", fgColor="F3E8FF")
 
         # Collect task names in first-appearance order
         task_names: list[str] = []
@@ -611,53 +694,120 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
                         task_names.append(tname)
                         seen.add(tname)
 
+        n_task_rows = max(len(task_names), 1)
+        p_start_row = row_num
+
         if not task_names:
-            ws.append([pname, "—"] + [None] * len(all_days))
-            ws.cell(row=row_num, column=1).font = Font(bold=True)
+            # No tasks — single row
+            ws.append(["", "—"] + [None] * len(all_days))
+            for col in range(1, ncols + 1):
+                ws.cell(row_num, col).border = bdr()
+                ws.cell(row_num, col).fill   = WHITE_F
+            ws.cell(row_num, 1).fill = NAME_F
             row_num += 1
-            continue
+        else:
+            for t_idx, tname in enumerate(task_names):
+                tc_hex = task_color_map.get(tname, "")
+                task_light = sf(lighten(tc_hex, 0.80)) if tc_hex else sf("F9FAFB")
+                task_vlt   = sf(lighten(tc_hex, 0.91)) if tc_hex else WHITE_F
+                tc_font    = tc_hex if tc_hex else "374151"
 
-        for t_idx, tname in enumerate(task_names):
-            row_data = [pname if t_idx == 0 else "", tname]
-            for d in all_days:
-                td = day_alloc.get(str(d))
-                if td == "absent":
-                    row_data.append("Absent")
-                elif isinstance(td, dict):
-                    row_data.append(td.get(tname) or None)
-                else:
-                    row_data.append(None)
-            ws.append(row_data)
+                row_data = ["", tname]
+                for d in all_days:
+                    td = day_alloc.get(str(d))
+                    if td == "absent":
+                        row_data.append("ABS")
+                    elif isinstance(td, dict):
+                        row_data.append(td.get(tname) or None)
+                    else:
+                        row_data.append(None)
+                ws.append(row_data)
 
-            # Background colour for person/task label columns
-            ws.cell(row=row_num, column=1).fill = row_fill
-            ws.cell(row=row_num, column=2).fill = row_fill
-            if t_idx == 0:
-                ws.cell(row=row_num, column=1).font = Font(bold=True)
+                # Task name cell (col B)
+                tc = ws.cell(row_num, 2)
+                tc.font      = Font(bold=False, color=tc_font, size=9)
+                tc.fill      = task_light
+                tc.alignment = left
+                tc.border    = bdr()
 
-            # Day cells
-            for col_offset, d in enumerate(all_days):
-                cell = ws.cell(row=row_num, column=3 + col_offset)
-                td   = day_alloc.get(str(d))
-                if td == "absent":
-                    cell.fill      = ABS_FILL
-                    cell.font      = Font(color="991B1B")
-                    cell.alignment = centre
-                elif d < cur_first:
-                    cell.fill = prev_data
-                    cell.alignment = centre
-                else:
-                    cell.fill      = row_fill
-                    cell.alignment = centre
+                # Person name col (col A) — filled in after merge
+                ws.cell(row_num, 1).fill   = NAME_F
+                ws.cell(row_num, 1).border = bdr()
 
-            row_num += 1
+                # Day cells
+                for col_off, d in enumerate(all_days):
+                    col  = 3 + col_off
+                    cell = ws.cell(row_num, col)
+                    td   = day_alloc.get(str(d))
+                    val  = cell.value
 
-    # Column widths & freeze
-    ws.column_dimensions["A"].width = 15
-    ws.column_dimensions["B"].width = 26
-    for col in range(3, len(header) + 1):
-        ws.column_dimensions[get_column_letter(col)].width = 8
-    ws.freeze_panes = "C2"
+                    if td == "absent":
+                        cell.fill  = ABS_F
+                        cell.font  = Font(color="991B1B", size=9, bold=True)
+                        cell.value = "ABS" if t_idx == 0 else None
+                    elif val:
+                        cell.fill = task_vlt if d >= cur_first else sf(lighten(tc_hex or "A78BFA", 0.88))
+                        cell.font = Font(color=tc_font, size=9)
+                    elif schedule_entry := (day_alloc.get(str(d)) is None):
+                        cell.fill = OFF_F
+                    else:
+                        cell.fill = OFF_F if d >= cur_first else PREV_D
+
+                    cell.alignment = ctr
+                    cell.border    = bdr(
+                        lft=TK if d >= cur_first and col_off == (next((i for i,x in enumerate(all_days) if x >= cur_first), 0)) else T,
+                        rgt=T
+                    )
+
+                ws.row_dimensions[row_num].height = 15
+                row_num += 1
+
+        # Merge person name vertically and write it
+        if n_task_rows > 1:
+            ws.merge_cells(start_row=p_start_row, start_column=1,
+                           end_row=p_start_row + n_task_rows - 1, end_column=1)
+        cell = ws.cell(p_start_row, 1)
+        cell.value     = pname
+        cell.font      = Font(bold=True, size=10, color="312E81")
+        cell.fill      = NAME_F
+        cell.alignment = Alignment(horizontal="left", vertical="top")
+
+        # Thick bottom border after each person block
+        for col in range(1, ncols + 1):
+            c = ws.cell(row_num - 1, col)
+            c.border = Border(top=c.border.top, bottom=M, left=c.border.left, right=c.border.right)
+
+    # ── Totals row ────────────────────────────────────────────────────────────
+    ws.append(["Total", ""] + [None] * len(all_days))
+    tot_row = row_num
+    for col_off, d in enumerate(all_days):
+        d_str = str(d)
+        total = 0.0
+        for person in all_people:
+            td = person_alloc[person["id"]].get(d_str)
+            if isinstance(td, dict):
+                total += sum(td.values())
+        cell = ws.cell(tot_row, 3 + col_off)
+        if total > 0:
+            cell.value = total
+        cell.fill      = TOT_F
+        cell.font      = Font(bold=True, size=9, color="166534")
+        cell.alignment = ctr
+        cell.border    = bdr(top=M)
+    ws.cell(tot_row, 1).font      = Font(bold=True, color="166534")
+    ws.cell(tot_row, 1).fill      = TOT_F
+    ws.cell(tot_row, 1).alignment = left
+    ws.cell(tot_row, 1).border    = bdr(top=M)
+    ws.cell(tot_row, 2).fill      = TOT_F
+    ws.cell(tot_row, 2).border    = bdr(top=M)
+    ws.row_dimensions[tot_row].height = 16
+
+    # ── Column widths & freeze ────────────────────────────────────────────────
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 22
+    for col in range(3, ncols + 1):
+        ws.column_dimensions[get_column_letter(col)].width = 7
+    ws.freeze_panes = "C4"
 
     buf = BytesIO()
     wb.save(buf)
