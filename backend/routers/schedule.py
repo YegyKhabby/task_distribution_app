@@ -19,7 +19,7 @@ def save_schedule(person_id: str, entries: list[ScheduleEntry]):
     # Delete existing then re-insert
     supabase.table("person_schedule").delete().eq("person_id", person_id).execute()
     rows = [
-        {"person_id": person_id, "day_of_week": e.day_of_week, "hours": e.hours}
+        {"person_id": person_id, "day_of_week": e.day_of_week, "hours": e.hours, "location": e.location}
         for e in entries
         if e.hours > 0
     ]

@@ -33,7 +33,7 @@ export default function Setup() {
     const s = emptySchedule()
     for (const r of rows) {
       const d = s.find((x) => x.day === r.day_of_week)
-      if (d) { d.checked = true; d.hours = r.hours }
+      if (d) { d.checked = true; d.hours = r.hours; d.location = r.location || 'office' }
     }
     setSchedule(s)
     setLoadingSchedule(false)
@@ -65,6 +65,12 @@ export default function Setup() {
     )
   }
 
+  const setLocation = (day, loc) => {
+    setSchedule((s) =>
+      s.map((d) => d.day === day ? { ...d, location: loc } : d)
+    )
+  }
+
   const save = async () => {
     if (!selectedId) { setError('Select a person first'); return }
     setSaving(true)
@@ -72,7 +78,7 @@ export default function Setup() {
     try {
       const entries = schedule
         .filter((d) => d.checked && d.hours > 0)
-        .map((d) => ({ person_id: selectedId, day_of_week: d.day, hours: Number(d.hours) }))
+        .map((d) => ({ person_id: selectedId, day_of_week: d.day, hours: Number(d.hours), location: d.location }))
       await api.saveSchedule(selectedId, entries)
       setSaved(true)
     } catch (e) {
@@ -173,6 +179,20 @@ export default function Setup() {
                           className="w-20 border border-gray-300 rounded-md px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400"
                         />
                         <span className="text-sm text-gray-400">hrs</span>
+                        <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs font-medium">
+                          <button
+                            onClick={() => setLocation(d.num, 'office')}
+                            className={`px-2.5 py-1 transition-colors ${entry.location === 'office' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
+                          >
+                            Office
+                          </button>
+                          <button
+                            onClick={() => setLocation(d.num, 'home')}
+                            className={`px-2.5 py-1 transition-colors border-l border-gray-200 ${entry.location === 'home' ? 'bg-teal-500 text-white' : 'bg-white text-gray-500 hover:bg-gray-50'}`}
+                          >
+                            Home
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <span className="text-sm text-gray-300">day off</span>
@@ -205,10 +225,10 @@ export default function Setup() {
 
 function emptySchedule() {
   return [
-    { day: 1, checked: false, hours: 4 },
-    { day: 2, checked: false, hours: 4 },
-    { day: 3, checked: false, hours: 4 },
-    { day: 4, checked: false, hours: 4 },
-    { day: 5, checked: false, hours: 4 },
+    { day: 1, checked: false, hours: 4, location: 'office' },
+    { day: 2, checked: false, hours: 4, location: 'office' },
+    { day: 3, checked: false, hours: 4, location: 'office' },
+    { day: 4, checked: false, hours: 4, location: 'office' },
+    { day: 5, checked: false, hours: 4, location: 'office' },
   ]
 }

@@ -17,6 +17,7 @@ class ScheduleEntry(BaseModel):
     person_id: str
     day_of_week: int   # 1=Mon … 5=Fri
     hours: float
+    location: str = "office"  # "office" | "home"
 
 
 class TaskCreate(BaseModel):
