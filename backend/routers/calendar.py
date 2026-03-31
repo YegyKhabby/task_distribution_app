@@ -473,7 +473,8 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
 
     # ── Per-person allocations ────────────────────────────────────────────────
     # day_alloc[pid][date_str] = {task_name: hours} | "absent" | None
-    person_alloc: dict[str, dict] = {}
+    person_alloc:   dict[str, dict] = {}
+    task_color_map: dict[str, str]  = {}  # populated while processing distributions
 
     for person in all_people:
         pid   = person["id"]
@@ -498,6 +499,11 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
             })
             if row.get("preferred_day"):
                 preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_day"]
+            # Collect task colours while we're here — avoids a separate query later
+            tname = row["tasks"]["name"]
+            tc    = (row["tasks"].get("color") or "").lstrip("#")
+            if tc and tname not in task_color_map:
+                task_color_map[tname] = tc
 
         abs_res = supabase.table("absences").select("date").eq("person_id", pid).gte(
             "date", str(last_monday_prev)
@@ -557,17 +563,7 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
 
         person_alloc[pid] = day_alloc
 
-    # ── Collect task colour map ───────────────────────────────────────────────
-    task_color_map: dict[str, str] = {}  # task_name -> hex (no #)
-    for person in all_people:
-        pid = person["id"]
-        cr = supabase.table("task_distribution").select("tasks(name, color)").eq("person_id", pid).execute()
-        for row in cr.data:
-            tname = row["tasks"]["name"]
-            tc    = (row["tasks"].get("color") or "").lstrip("#")
-            if tc and tname not in task_color_map:
-                task_color_map[tname] = tc
-
+    # task_color_map was populated during the person-processing loop above
     def lighten(hex6: str, factor: float = 0.82) -> str:
         """Blend hex6 toward white by factor."""
         try:
