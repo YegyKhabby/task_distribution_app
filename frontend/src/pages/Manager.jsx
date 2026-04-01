@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api'
 
-const TABS = ['Tasks', 'Assignments', 'Distribute']
+const TABS = ['Tasks', 'Distribute']
 const COLORS = ['#6366f1', '#f97316', '#10b981', '#0ea5e9', '#ec4899', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#a78bfa']
 const DEFAULT_RESPONSIBLE_PERSONS = ['Anastasia', 'Albana', 'Metuge', 'Moinul', 'Yash', 'Sidrit']
 const RP_STORAGE_KEY = 'responsible_persons'
@@ -58,10 +58,7 @@ export default function Manager() {
       </div>
 
       {tab === 'Tasks' && (
-        <TasksTab tasks={tasks} onReload={reload} />
-      )}
-      {tab === 'Assignments' && (
-        <AssignmentsTab tasks={tasks} people={people} fixedHours={fixedHours} onReload={reload} />
+        <TasksTab tasks={tasks} people={people} fixedHours={fixedHours} onReload={reload} />
       )}
       {tab === 'Distribute' && (
         <DistributeTab tasks={tasks} people={people} />
@@ -70,279 +67,9 @@ export default function Manager() {
   )
 }
 
-// ── Tasks Tab ──────────────────────────────────────────────────────────────
-
-function TasksTab({ tasks, onReload }) {
-  const [editing, setEditing] = useState(null)
-  const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', responsible_person: '' })
-  const [error, setError] = useState('')
-  const [responsiblePersons, setResponsiblePersons] = useState(loadResponsiblePersons)
-  const [showRpEditor, setShowRpEditor] = useState(false)
-  const [newRpName, setNewRpName] = useState('')
-  const [distAvg, setDistAvg] = useState(null) // { total, freshdesk } — avg across distributed weeks
-
-  useEffect(() => {
-    if (!tasks.length) return
-    const freshdeskFillIds = new Set(
-      tasks.filter(t => t.is_fill && t.name.toLowerCase().includes('freshdesk')).map(t => t.id)
-    )
-    api.getDistribution().then(rows => {
-      // Sum per week: total and freshdesk-only
-      const weekTotal = {}, weekFreshdesk = {}
-      for (const row of rows) {
-        weekTotal[row.week_number] = (weekTotal[row.week_number] || 0) + row.hours_per_week
-        if (freshdeskFillIds.has(row.task_id)) {
-          weekFreshdesk[row.week_number] = (weekFreshdesk[row.week_number] || 0) + row.hours_per_week
-        }
-      }
-      const avg = (obj) => {
-        const vals = Object.values(obj)
-        return vals.length ? Math.round(vals.reduce((s, h) => s + h, 0) / vals.length * 2) / 2 : null
-      }
-      setDistAvg({ total: avg(weekTotal), freshdesk: avg(weekFreshdesk) })
-    }).catch(() => {})
-  }, [tasks])
-
-  const addRp = () => {
-    const name = newRpName.trim()
-    if (!name || responsiblePersons.includes(name)) return
-    const updated = [...responsiblePersons, name]
-    setResponsiblePersons(updated)
-    saveResponsiblePersons(updated)
-    setNewRpName('')
-  }
-
-  const removeRp = (name) => {
-    const updated = responsiblePersons.filter((n) => n !== name)
-    setResponsiblePersons(updated)
-    saveResponsiblePersons(updated)
-  }
-
-  const startAdd = () => {
-    setForm({ name: '', weekly_hours_target: '', color: COLORS[tasks.length % COLORS.length], priority: tasks.length + 1, week_scope: 'both', is_fill: false, responsible_person: '' })
-    setEditing('new')
-    setError('')
-  }
-
-  const startEdit = (t) => {
-    setForm({ name: t.name, weekly_hours_target: t.weekly_hours_target, color: t.color || COLORS[0], priority: t.priority || '', week_scope: t.week_scope || 'both', is_fill: t.is_fill || false, responsible_person: t.responsible_person || '' })
-    setEditing(t.id)
-    setError('')
-  }
-
-  const save = async () => {
-    if (!form.name.trim()) { setError('Name required'); return }
-    if (!form.is_fill && (!form.weekly_hours_target || Number(form.weekly_hours_target) < 0)) { setError('Hours required (or check Fill spare hours)'); return }
-    const data = {
-      name: form.name.trim(),
-      weekly_hours_target: form.is_fill ? 0 : Number(form.weekly_hours_target),
-      color: form.color,
-      priority: form.priority ? Number(form.priority) : null,
-      week_scope: form.week_scope,
-      is_fill: form.is_fill,
-      responsible_person: form.responsible_person || null,
-    }
-    try {
-      if (editing === 'new') await api.createTask(data)
-      else await api.updateTask(editing, data)
-      setEditing(null)
-      onReload()
-    } catch (e) { setError(e.message) }
-  }
-
-  const remove = async (id) => {
-    if (!confirm('Delete this task? All assignments will be removed.')) return
-    await api.deleteTask(id)
-    onReload()
-  }
-
-  // Both from actual distribution data so week-scoped tasks and fill are handled correctly
-  const totalInclFreshdesk = distAvg?.total ?? null        // avg total distributed/week (~200h)
-  const totalExclFreshdesk = distAvg != null && distAvg.total != null && distAvg.freshdesk != null
-    ? Math.round((distAvg.total - distAvg.freshdesk) * 2) / 2
-    : null
-
-  return (
-    <div>
-      <div className="flex items-center gap-4 mb-4 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm">
-        <span className="text-indigo-700 font-medium">Total hrs/week:</span>
-        <span className="text-indigo-900 font-semibold">
-          {totalInclFreshdesk != null ? `${totalInclFreshdesk}h` : '—'}
-          <span className="font-normal text-indigo-500"> (incl. Freshdesk)</span>
-        </span>
-        <span className="text-gray-300">|</span>
-        <span className="text-indigo-900 font-semibold">
-          {totalExclFreshdesk != null ? `${totalExclFreshdesk}h` : '—'}
-          <span className="font-normal text-indigo-500"> (excl. Freshdesk)</span>
-        </span>
-      </div>
-      <div className="flex justify-between items-center mb-4">
-        <p className="text-sm text-gray-500">{tasks.length} tasks defined</p>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowRpEditor((v) => !v)}
-            className="text-sm text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
-          >
-            Manage people
-          </button>
-          <button onClick={startAdd} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">
-            + Add Task
-          </button>
-        </div>
-      </div>
-
-      {showRpEditor && (
-        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4">
-          <p className="text-xs font-semibold text-gray-600 mb-3">Full-time responsible person options</p>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {responsiblePersons.map((name) => (
-              <span key={name} className="flex items-center gap-1.5 bg-white border border-gray-200 text-sm px-3 py-1 rounded-full">
-                {name}
-                <button
-                  onClick={() => removeRp(name)}
-                  className="text-gray-400 hover:text-red-500 leading-none"
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <input
-              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              placeholder="Add name…"
-              value={newRpName}
-              onChange={(e) => setNewRpName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && addRp()}
-            />
-            <button
-              onClick={addRp}
-              className="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700"
-            >
-              Add
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-        {tasks.map((t) => (
-          <div key={t.id} className="px-5 py-3 flex items-center gap-4">
-            {editing === t.id ? (
-              <TaskForm form={form} setForm={setForm} error={error} onSave={save} onCancel={() => setEditing(null)} responsiblePersons={responsiblePersons} />
-            ) : (
-              <>
-                <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: t.color || '#6366f1' }} />
-                <div className="flex-1">
-                  <span className="font-medium text-gray-900">{t.name}</span>
-                  {t.is_fill
-                    ? <span className="ml-3 text-sm text-emerald-600 font-medium">fills spare hours</span>
-                    : <span className="ml-3 text-sm text-gray-500">{t.weekly_hours_target} hrs/week</span>
-                  }
-                  {t.priority && <span className="ml-2 text-xs text-gray-400">P{t.priority}</span>}
-                  <span className="ml-2 text-xs text-gray-400">
-                    {t.week_scope === 'W1' ? 'Week 1 only' : t.week_scope === 'W234' ? 'Week 2–3–4 only' : 'Every week'}
-                  </span>
-                  {t.responsible_person && (
-                    <span className="ml-3 text-xs font-medium bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">
-                      {t.responsible_person}
-                    </span>
-                  )}
-                </div>
-                <button onClick={() => startEdit(t)} className="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-600 hover:bg-indigo-50">Edit</button>
-                <button onClick={() => remove(t.id)} className="text-xs px-2 py-1 rounded border border-red-200 text-red-500 hover:bg-red-50">Remove</button>
-              </>
-            )}
-          </div>
-        ))}
-
-        {editing === 'new' && (
-          <div className="px-5 py-3">
-            <TaskForm form={form} setForm={setForm} error={error} onSave={save} onCancel={() => setEditing(null)} isNew responsiblePersons={responsiblePersons} />
-          </div>
-        )}
-
-        {tasks.length === 0 && editing !== 'new' && (
-          <p className="px-5 py-8 text-center text-gray-400">No tasks yet. Add one above.</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePersons }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2 w-full">
-      <input
-        className="border border-gray-300 rounded-md px-3 py-1.5 text-sm flex-1 min-w-36 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-        placeholder="Task name"
-        value={form.name}
-        onChange={(e) => setForm({ ...form, name: e.target.value })}
-        autoFocus
-      />
-      <input
-        type="number" min={0} step={0.5}
-        className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-28 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-        placeholder="Hrs/week"
-        value={form.weekly_hours_target}
-        onChange={(e) => setForm({ ...form, weekly_hours_target: e.target.value })}
-      />
-      <input
-        type="number" min={1}
-        className="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-20 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-        placeholder="Priority"
-        value={form.priority}
-        onChange={(e) => setForm({ ...form, priority: e.target.value })}
-      />
-      <select
-        className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-        value={form.week_scope}
-        onChange={(e) => setForm({ ...form, week_scope: e.target.value })}
-      >
-        <option value="both">Every week</option>
-        <option value="W1">Week 1 only</option>
-        <option value="W234">Week 2–3–4 only</option>
-      </select>
-      <select
-        className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-        value={form.responsible_person}
-        onChange={(e) => setForm({ ...form, responsible_person: e.target.value })}
-      >
-        <option value="">Full-time responsible…</option>
-        {responsiblePersons.map((name) => (
-          <option key={name} value={name}>{name}</option>
-        ))}
-      </select>
-      <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer whitespace-nowrap">
-        <input
-          type="checkbox"
-          checked={form.is_fill}
-          onChange={(e) => setForm({ ...form, is_fill: e.target.checked, weekly_hours_target: e.target.checked ? 0 : form.weekly_hours_target })}
-          className="w-4 h-4 rounded text-emerald-600"
-        />
-        Fill spare hours
-      </label>
-      <div className="flex gap-1">
-        {COLORS.map((c) => (
-          <button
-            key={c}
-            onClick={() => setForm({ ...form, color: c })}
-            className={`w-5 h-5 rounded-full transition-transform ${form.color === c ? 'scale-125 ring-2 ring-offset-1 ring-gray-400' : ''}`}
-            style={{ backgroundColor: c }}
-          />
-        ))}
-      </div>
-      {error && <span className="text-red-500 text-xs w-full">{error}</span>}
-      <button onClick={onSave} className="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700">
-        {isNew ? 'Add' : 'Save'}
-      </button>
-      <button onClick={onCancel} className="text-gray-500 px-3 py-1.5 rounded-md text-sm hover:bg-gray-100">Cancel</button>
-    </div>
-  )
-}
+// ── Tasks Tab (merged Tasks + Assignments) ─────────────────────────────────
 
 const DAY_OPTIONS = [
-  { value: '', label: 'Any day' },
   { value: 1, label: 'Mon' },
   { value: 2, label: 'Tue' },
   { value: 3, label: 'Wed' },
@@ -350,17 +77,27 @@ const DAY_OPTIONS = [
   { value: 5, label: 'Fri' },
 ]
 
-// ── Assignments Tab ────────────────────────────────────────────────────────
+function TasksTab({ tasks, people, fixedHours, onReload }) {
+  // ── Task editing state ──
+  const [editing, setEditing] = useState(null)
+  const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', week_scope: 'both', is_fill: false, responsible_person: '' })
+  const [formError, setFormError] = useState('')
+  const [responsiblePersons, setResponsiblePersons] = useState(loadResponsiblePersons)
+  const [showRpEditor, setShowRpEditor] = useState(false)
+  const [newRpName, setNewRpName] = useState('')
 
-function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
+  // ── Assignment state ──
   const [expanded, setExpanded] = useState(null)
   const [saving, setSaving] = useState({})
   const [weekNumber, setWeekNumber] = useState(1)
   const [weekAssignments, setWeekAssignments] = useState([])
   const [distribution, setDistribution] = useState([])
-  // Per-task: set of task IDs where changes apply to THIS week only (default: all weeks)
   const [thisWeekOnly, setThisWeekOnly] = useState(new Set())
 
+  // ── Hours summary state ──
+  const [distAvg, setDistAvg] = useState(null)
+
+  // ── Load week assignments + distribution ──
   const loadWeekData = useCallback(async (wn) => {
     const [a, d] = await Promise.all([
       api.getAssignments(wn),
@@ -378,20 +115,40 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
     setDistribution([])
   }
 
-  // Index: task_id -> set of person_ids (for this week)
+  // ── Load Freshdesk distribution averages ──
+  useEffect(() => {
+    if (!tasks.length) return
+    const freshdeskFillIds = new Set(
+      tasks.filter(t => t.is_fill && t.name.toLowerCase().includes('freshdesk')).map(t => t.id)
+    )
+    api.getDistribution().then(rows => {
+      const weekTotal = {}, weekFreshdesk = {}
+      for (const row of rows) {
+        weekTotal[row.week_number] = (weekTotal[row.week_number] || 0) + row.hours_per_week
+        if (freshdeskFillIds.has(row.task_id)) {
+          weekFreshdesk[row.week_number] = (weekFreshdesk[row.week_number] || 0) + row.hours_per_week
+        }
+      }
+      const avg = (obj) => {
+        const vals = Object.values(obj)
+        return vals.length ? Math.round(vals.reduce((s, h) => s + h, 0) / vals.length * 2) / 2 : null
+      }
+      setDistAvg({ total: avg(weekTotal), freshdesk: avg(weekFreshdesk) })
+    }).catch(() => {})
+  }, [tasks])
+
+  // ── Computed indexes ──
   const assignedMap = {}
   for (const a of weekAssignments) {
     if (!assignedMap[a.task_id]) assignedMap[a.task_id] = new Set()
     assignedMap[a.task_id].add(a.person_id)
   }
 
-  // Index: (task_id, person_id) -> fixed hours (global)
   const fixedMap = {}
   for (const f of fixedHours) {
     fixedMap[`${f.task_id}:${f.person_id}`] = f.hours
   }
 
-  // Index: (task_id, person_id) -> preferred_days array for current week (from task_people)
   const preferredDayMap = {}
   for (const a of weekAssignments) {
     if (a.preferred_days?.length) {
@@ -399,6 +156,69 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
     }
   }
 
+  // ── Hours summary ──
+  const totalInclFreshdesk = distAvg?.total ?? null
+  const totalExclFreshdesk = distAvg?.total != null && distAvg?.freshdesk != null
+    ? Math.round((distAvg.total - distAvg.freshdesk) * 2) / 2
+    : null
+
+  // ── Responsible persons ──
+  const addRp = () => {
+    const name = newRpName.trim()
+    if (!name || responsiblePersons.includes(name)) return
+    const updated = [...responsiblePersons, name]
+    setResponsiblePersons(updated)
+    saveResponsiblePersons(updated)
+    setNewRpName('')
+  }
+
+  const removeRp = (name) => {
+    const updated = responsiblePersons.filter((n) => n !== name)
+    setResponsiblePersons(updated)
+    saveResponsiblePersons(updated)
+  }
+
+  // ── Task CRUD ──
+  const startAdd = () => {
+    setForm({ name: '', weekly_hours_target: '', color: COLORS[Math.floor(Math.random() * COLORS.length)], priority: tasks.length + 1, week_scope: 'both', is_fill: false, responsible_person: '' })
+    setEditing('new')
+    setFormError('')
+  }
+
+  const startEdit = (t) => {
+    setForm({ name: t.name, weekly_hours_target: t.weekly_hours_target, color: t.color || COLORS[0], priority: t.priority || '', week_scope: t.week_scope || 'both', is_fill: t.is_fill || false, responsible_person: t.responsible_person || '' })
+    setEditing(t.id)
+    setFormError('')
+  }
+
+  const save = async () => {
+    if (!form.name.trim()) { setFormError('Name required'); return }
+    if (!form.is_fill && (!form.weekly_hours_target || Number(form.weekly_hours_target) < 0)) { setFormError('Hours required (or check Fill spare hours)'); return }
+    const data = {
+      name: form.name.trim(),
+      weekly_hours_target: form.is_fill ? 0 : Number(form.weekly_hours_target),
+      color: form.color,
+      priority: form.priority ? Number(form.priority) : null,
+      week_scope: form.week_scope,
+      is_fill: form.is_fill,
+      responsible_person: form.responsible_person || null,
+    }
+    try {
+      if (editing === 'new') await api.createTask(data)
+      else await api.updateTask(editing, data)
+      setEditing(null)
+      setExpanded(null)
+      onReload()
+    } catch (e) { setFormError(e.message) }
+  }
+
+  const remove = async (id) => {
+    if (!confirm('Delete this task? All assignments will be removed.')) return
+    await api.deleteTask(id)
+    onReload()
+  }
+
+  // ── Assignment actions ──
   const weeksFor = (taskId) => thisWeekOnly.has(taskId) ? [weekNumber] : [1, 2, 3, 4]
 
   const toggleAssign = async (taskId, personId, currently_assigned) => {
@@ -434,13 +254,24 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
     })
   }
 
-  if (tasks.length === 0) {
-    return <p className="text-gray-400 text-center py-12">No tasks yet. Go to the Tasks tab to add some.</p>
-  }
-
   return (
     <div>
-      <div className="flex items-center gap-2 mb-4">
+      {/* ── Hours summary bar ── */}
+      <div className="flex items-center gap-4 mb-4 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm">
+        <span className="text-indigo-700 font-medium">Total hrs/week:</span>
+        <span className="text-indigo-900 font-semibold">
+          {totalInclFreshdesk != null ? `${totalInclFreshdesk}h` : '—'}
+          <span className="font-normal text-indigo-500"> (incl. Freshdesk)</span>
+        </span>
+        <span className="text-gray-300">|</span>
+        <span className="text-indigo-900 font-semibold">
+          {totalExclFreshdesk != null ? `${totalExclFreshdesk}h` : '—'}
+          <span className="font-normal text-indigo-500"> (excl. Freshdesk)</span>
+        </span>
+      </div>
+
+      {/* ── Top controls: week selector + manage people + add task ── */}
+      <div className="flex items-center gap-2 mb-4 flex-wrap">
         <span className="text-sm text-gray-500">Week:</span>
         <div className="flex gap-1">
           {[1, 2, 3, 4].map((wn) => (
@@ -455,32 +286,105 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
             </button>
           ))}
         </div>
+        <div className="flex gap-2 ml-auto">
+          <button
+            onClick={() => setShowRpEditor((v) => !v)}
+            className="text-sm text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
+          >
+            Manage people
+          </button>
+          <button onClick={startAdd} className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-indigo-700">
+            + Add Task
+          </button>
+        </div>
       </div>
 
+      {/* ── Responsible persons editor ── */}
+      {showRpEditor && (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4">
+          <p className="text-xs font-semibold text-gray-600 mb-3">Full-time responsible person options</p>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {responsiblePersons.map((name) => (
+              <span key={name} className="flex items-center gap-1.5 bg-white border border-gray-200 text-sm px-3 py-1 rounded-full">
+                {name}
+                <button onClick={() => removeRp(name)} className="text-gray-400 hover:text-red-500 leading-none">×</button>
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              placeholder="Add name…"
+              value={newRpName}
+              onChange={(e) => setNewRpName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && addRp()}
+            />
+            <button onClick={addRp} className="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700">Add</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Task list ── */}
       <div className="space-y-3">
         {tasks.map((t) => {
           const assigned = assignedMap[t.id] || new Set()
           const isOpen = expanded === t.id
+          const isEditing = editing === t.id
+
           return (
             <div key={t.id} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
-              <button
-                onClick={() => setExpanded(isOpen ? null : t.id)}
-                className="w-full flex items-center gap-4 px-5 py-3 hover:bg-gray-50 text-left"
-              >
+              {/* Card header */}
+              <div className="flex items-center gap-3 px-5 py-3">
                 <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: t.color || '#6366f1' }} />
-                <div className="flex-1">
-                  <span className="font-medium text-gray-900">{t.name}</span>
-                  <span className="ml-3 text-sm text-gray-500">{t.weekly_hours_target} hrs/week</span>
-                  <span className="ml-3 text-xs text-gray-400">{assigned.size} assigned in Week {weekNumber}</span>
-                </div>
-                <span className="text-gray-400 text-xs">{isOpen ? '▲' : '▼'}</span>
-              </button>
+                <button
+                  onClick={() => {
+                    if (isOpen) { setExpanded(null); setEditing(null) }
+                    else { setExpanded(t.id); startEdit(t) }
+                  }}
+                  className="flex-1 flex items-center gap-2 text-left min-w-0"
+                >
+                  <span className="font-medium text-gray-900 truncate">{t.name}</span>
+                  {t.is_fill
+                    ? <span className="text-xs text-emerald-600 font-medium shrink-0">fills spare</span>
+                    : <span className="text-sm text-gray-500 shrink-0">{t.weekly_hours_target}h/wk</span>
+                  }
+                  {t.priority && <span className="text-xs text-gray-400 shrink-0">P{t.priority}</span>}
+                  <span className="text-xs text-gray-400 shrink-0">
+                    {t.week_scope === 'W1' ? 'W1 only' : t.week_scope === 'W234' ? 'W2–4 only' : ''}
+                  </span>
+                  {t.responsible_person && (
+                    <span className="text-xs font-medium bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full shrink-0">
+                      {t.responsible_person}
+                    </span>
+                  )}
+                  <span className="text-xs text-gray-400 shrink-0">{assigned.size} assigned</span>
+                </button>
+                <button
+                  onClick={() => remove(t.id)}
+                  className="text-xs px-2 py-1 rounded border border-red-200 text-red-500 hover:bg-red-50 shrink-0"
+                >
+                  Remove
+                </button>
+                <span className="text-gray-400 text-xs shrink-0">{isOpen ? '▲' : '▼'}</span>
+              </div>
 
+              {/* Expanded: edit form + people & assignments */}
               {isOpen && (
-                <div className="border-t border-gray-100 px-5 py-4">
+                <div className="border-t border-gray-100">
+                <div className="px-5 py-4 bg-gray-50 border-b border-gray-100">
+                  <TaskForm
+                    form={form}
+                    setForm={setForm}
+                    error={formError}
+                    onSave={save}
+                    onCancel={() => { setEditing(null); setExpanded(null) }}
+                    responsiblePersons={responsiblePersons}
+                  />
+                </div>
+                <div className="px-5 py-4">
                   <div className="flex items-center justify-between mb-3">
                     <p className="text-xs text-gray-500">
-                      Who works on this task? Optionally pin a preferred day or set fixed hours.
+                      Assign people, set fixed hours, or pin preferred days.
                     </p>
                     <label className="flex items-center gap-2 cursor-pointer select-none ml-4 shrink-0">
                       <span className="text-xs text-gray-500">
@@ -535,7 +439,7 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
                                 <span className="text-xs text-gray-400">{fixed ? 'fixed hrs' : 'auto'}</span>
                               </div>
                               <div className="flex items-center gap-1">
-                                {DAY_OPTIONS.filter(o => o.value !== '').map((o) => {
+                                {DAY_OPTIONS.map((o) => {
                                   const active = preferredDays.includes(o.value)
                                   return (
                                     <button
@@ -565,11 +469,110 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
                     })}
                   </div>
                 </div>
+                </div>
               )}
             </div>
           )
         })}
+
+        {/* New task form */}
+        {editing === 'new' && (
+          <div className="bg-white border border-indigo-200 rounded-xl shadow-sm px-5 py-4">
+            <p className="text-xs font-semibold text-gray-600 mb-3">New task</p>
+            <TaskForm
+              form={form}
+              setForm={setForm}
+              error={formError}
+              onSave={save}
+              onCancel={() => setEditing(null)}
+              isNew
+              responsiblePersons={responsiblePersons}
+            />
+          </div>
+        )}
+
+        {tasks.length === 0 && editing !== 'new' && (
+          <p className="text-center text-gray-400 py-12">No tasks yet. Click + Add Task to get started.</p>
+        )}
       </div>
+    </div>
+  )
+}
+
+function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePersons }) {
+  return (
+    <div className="flex flex-wrap items-end gap-2 w-full">
+      <div className="flex flex-col gap-1 flex-1 min-w-36">
+        <span className="text-xs text-gray-400">Task name</span>
+        <input
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          placeholder="Task name"
+          value={form.name}
+          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          autoFocus
+        />
+      </div>
+      <div className="flex flex-col gap-1 w-28">
+        <span className="text-xs text-gray-400">Hrs / week</span>
+        <input
+          type="number" min={0} step={0.5}
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          placeholder="0"
+          value={form.weekly_hours_target}
+          onChange={(e) => setForm({ ...form, weekly_hours_target: e.target.value })}
+        />
+      </div>
+      <div className="flex flex-col gap-1 w-20">
+        <span className="text-xs text-gray-400">Priority</span>
+        <input
+          type="number" min={1}
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          placeholder="—"
+          value={form.priority}
+          onChange={(e) => setForm({ ...form, priority: e.target.value })}
+        />
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-gray-400">Week scope</span>
+        <select
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          value={form.week_scope}
+          onChange={(e) => setForm({ ...form, week_scope: e.target.value })}
+        >
+          <option value="both">Every week</option>
+          <option value="W1">Week 1 only</option>
+          <option value="W234">Week 2–3–4 only</option>
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-gray-400">Full-time responsible</span>
+        <select
+          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          value={form.responsible_person}
+          onChange={(e) => setForm({ ...form, responsible_person: e.target.value })}
+        >
+          <option value="">None</option>
+          {responsiblePersons.map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+      </div>
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-gray-400">Fill spare hrs</span>
+        <label className="flex items-center gap-2 h-[34px] cursor-pointer">
+          <input
+            type="checkbox"
+            checked={form.is_fill}
+            onChange={(e) => setForm({ ...form, is_fill: e.target.checked, weekly_hours_target: e.target.checked ? 0 : form.weekly_hours_target })}
+            className="w-4 h-4 rounded text-emerald-600"
+          />
+        </label>
+      </div>
+      {error && <span className="text-red-500 text-xs w-full">{error}</span>}
+      <button onClick={onSave} className="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700 self-end">
+        {isNew ? 'Add' : 'Save'}
+      </button>
+      <button onClick={onCancel} className="text-gray-500 px-3 py-1.5 rounded-md text-sm hover:bg-gray-100 self-end">Cancel</button>
     </div>
   )
 }
@@ -583,7 +586,6 @@ function DistributeTab({ tasks, people }) {
   const [confirming, setConfirming] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
   const [error, setError] = useState('')
-  // overrides: {`person_id:task_id`: hours}
   const [overrides, setOverrides] = useState({})
 
   const loadPreview = async () => {
@@ -658,7 +660,6 @@ function DistributeTab({ tasks, people }) {
             </div>
           )}
 
-          {/* Per-task distribution */}
           <div className="space-y-3 mb-6">
             {[...preview.tasks].sort((a, b) => a.task_name.localeCompare(b.task_name)).map((t) => (
               <div key={t.task_id} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
@@ -707,7 +708,6 @@ function DistributeTab({ tasks, people }) {
             ))}
           </div>
 
-          {/* Per-person summary */}
           <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6">
             <div className="px-5 py-3 border-b border-gray-100">
               <h3 className="font-semibold text-gray-800">Person Summary</h3>
@@ -738,7 +738,6 @@ function DistributeTab({ tasks, people }) {
             </div>
           </div>
 
-          {/* Confirm */}
           <div className="flex items-center gap-3">
             <button
               onClick={confirm}

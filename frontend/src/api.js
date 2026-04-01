@@ -99,6 +99,9 @@ export const api = {
   getDayView: (date, weekStart = 1) => req('GET', `/calendar/day?date=${date}&week_start=${weekStart}`),
   getDayViewExportUrl: (date, weekStart = 1) => `${BASE}/calendar/day/export?date=${date}&week_start=${weekStart}`,
 
+  // Deskbird attendance
+  getDeskbirdAttendance: (startDate, days = 7) => req('GET', `/attendance/deskbird?start_date=${startDate}&days=${days}`),
+
   // Makeup
   getMakeup: (personId) => req('GET', `/makeup${personId ? `?person_id=${personId}` : ''}`),
   createMakeup: (data) => req('POST', '/makeup', data),

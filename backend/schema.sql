@@ -91,10 +91,31 @@ create table if not exists makeup_hours (
   created_at timestamptz default now()
 );
 
+create table if not exists deskbird_sync_runs (
+  id uuid primary key default gen_random_uuid(),
+  source text not null default 'local-laptop',
+  start_date date not null,
+  end_date date not null,
+  fetched_at timestamptz not null default now()
+);
+
+create table if not exists deskbird_attendance_bookings (
+  id uuid primary key default gen_random_uuid(),
+  sync_run_id uuid not null references deskbird_sync_runs(id) on delete cascade,
+  booking_date date not null,
+  person_name text not null,
+  normalized_name text not null,
+  normalized_first_name text not null default ''
+);
+
 create index if not exists absences_date_idx on absences(date);
 create index if not exists absences_person_idx on absences(person_id);
 create index if not exists dist_person_idx on task_distribution(person_id);
 create index if not exists dist_task_idx on task_distribution(task_id);
+create index if not exists deskbird_sync_runs_fetched_at_idx on deskbird_sync_runs(fetched_at desc);
+create index if not exists deskbird_attendance_bookings_date_idx on deskbird_attendance_bookings(booking_date);
+create index if not exists deskbird_attendance_bookings_norm_idx on deskbird_attendance_bookings(normalized_name);
+create index if not exists deskbird_attendance_bookings_first_norm_idx on deskbird_attendance_bookings(normalized_first_name);
 
 -- Row Level Security
 -- Enables RLS on all tables and adds a permissive policy so the app continues
@@ -125,4 +146,10 @@ create policy "allow all" on temporary_reallocations for all using (true) with c
 
 alter table makeup_hours enable row level security;
 create policy "allow all" on makeup_hours for all using (true) with check (true);
+
+alter table deskbird_sync_runs enable row level security;
+create policy "allow all" on deskbird_sync_runs for all using (true) with check (true);
+
+alter table deskbird_attendance_bookings enable row level security;
+create policy "allow all" on deskbird_attendance_bookings for all using (true) with check (true);
  
