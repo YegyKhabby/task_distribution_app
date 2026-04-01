@@ -13,10 +13,19 @@ function WeeklyTable({ people, scheduleMap }) {
   const active = people.filter(p => p.active)
   if (active.length === 0) return null
 
+  const dayTotals = DAYS.map(d =>
+    active.reduce((sum, p) => sum + ((scheduleMap[p.id] || {})[d.num]?.hours || 0), 0)
+  )
+  const teamWeeklyTotal = active.reduce((sum, p) => {
+    const sched = scheduleMap[p.id] || {}
+    return sum + DAYS.reduce((s, d) => s + (sched[d.num]?.hours || 0), 0)
+  }, 0)
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-8 shadow-sm">
-      <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
+      <div className="px-5 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-gray-700">Weekly Schedule</h2>
+        <span className="text-sm font-semibold text-indigo-700">{teamWeeklyTotal}h team total / week</span>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -26,11 +35,13 @@ function WeeklyTable({ people, scheduleMap }) {
               {DAYS.map(d => (
                 <th key={d.num} className="text-center px-2 py-2 font-medium text-gray-500 w-20">{d.label}</th>
               ))}
+              <th className="text-center px-2 py-2 font-medium text-gray-500 w-16">Total</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-50">
             {active.map((p, idx) => {
               const sched = scheduleMap[p.id] || {}
+              const weeklyTotal = DAYS.reduce((s, d) => s + (sched[d.num]?.hours || 0), 0)
               return (
                 <tr key={p.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
                   <td className="px-4 py-1.5 font-medium text-gray-800 whitespace-nowrap">{p.name}</td>
@@ -55,9 +66,17 @@ function WeeklyTable({ people, scheduleMap }) {
                       </td>
                     )
                   })}
+                  <td className="px-2 py-1.5 text-center font-semibold text-gray-700">{weeklyTotal}h</td>
                 </tr>
               )
             })}
+            <tr className="bg-gray-100 border-t border-gray-200">
+              <td className="px-4 py-1.5 font-semibold text-gray-700">Total</td>
+              {dayTotals.map((total, i) => (
+                <td key={i} className="px-2 py-1.5 text-center font-semibold text-gray-700">{total > 0 ? `${total}h` : '—'}</td>
+              ))}
+              <td className="px-2 py-1.5 text-center font-bold text-indigo-700">{teamWeeklyTotal}h</td>
+            </tr>
           </tbody>
         </table>
       </div>

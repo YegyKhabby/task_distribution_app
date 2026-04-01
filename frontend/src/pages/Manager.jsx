@@ -359,11 +359,11 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
   const toggleAssign = async (taskId, personId, currently_assigned) => {
     const key = `${taskId}:${personId}`
     setSaving((s) => ({ ...s, [key]: true }))
-    if (currently_assigned) {
-      await api.unassignPerson(taskId, personId, weekNumber)
-    } else {
-      await api.assignPerson({ task_id: taskId, person_id: personId, week_number: weekNumber })
-    }
+    await Promise.all([1, 2, 3, 4].map(wn =>
+      currently_assigned
+        ? api.unassignPerson(taskId, personId, wn)
+        : api.assignPerson({ task_id: taskId, person_id: personId, week_number: wn })
+    ))
     await loadWeekData(weekNumber)
     setSaving((s) => ({ ...s, [key]: false }))
   }
@@ -374,9 +374,10 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
   }
 
   const updatePreferredDay = async (taskId, personId, day) => {
-    await api.setPreferredDay(taskId, personId, weekNumber, day === '' ? null : Number(day))
-    const d = await api.getDistribution(weekNumber)
-    setDistribution(d)
+    await Promise.all([1, 2, 3, 4].map(wn =>
+      api.setPreferredDay(taskId, personId, wn, day === '' ? null : Number(day))
+    ))
+    await loadWeekData(weekNumber)
   }
 
   if (tasks.length === 0) {
@@ -400,7 +401,7 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
             </button>
           ))}
         </div>
-        <span className="text-xs text-gray-400 ml-1">Assignments and day pins are per-week</span>
+        <span className="ml-auto text-xs text-gray-400">Changes apply to all weeks</span>
       </div>
 
       <div className="space-y-3">
