@@ -63,7 +63,7 @@ class PreferredDayUpdate(BaseModel):
     task_id: str
     person_id: str
     week_number: int  # 1–4
-    preferred_day: Optional[int] = None  # 1–5 or None to clear
+    preferred_days: Optional[list[int]] = None  # list of 1–5, or None to clear
 
 
 class AbsenceCreate(BaseModel):

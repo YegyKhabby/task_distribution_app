@@ -145,9 +145,9 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
 
         # Preferred day pins for this person (same data the Calendar uses)
         preferred_days = {
-            d["task_id"]: d["preferred_day"]
+            d["task_id"]: d["preferred_days"]
             for d in dist_all
-            if d["person_id"] == pid and d.get("preferred_day")
+            if d["person_id"] == pid and d.get("preferred_days")
         }
 
         # Use the same distribute_week engine as the Calendar page —

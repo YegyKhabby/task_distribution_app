@@ -31,8 +31,8 @@ export default function Manager() {
       api.getPeople(),
       api.getFixedHours(),
     ])
-    setTasks(t)
-    setPeople(p.filter((x) => x.active))
+    setTasks([...t].sort((a, b) => a.name.localeCompare(b.name)))
+    setPeople(p.filter((x) => x.active).sort((a, b) => a.name.localeCompare(b.name)))
     setFixedHours(f)
   }, [])
 
@@ -79,6 +79,29 @@ function TasksTab({ tasks, onReload }) {
   const [responsiblePersons, setResponsiblePersons] = useState(loadResponsiblePersons)
   const [showRpEditor, setShowRpEditor] = useState(false)
   const [newRpName, setNewRpName] = useState('')
+  const [distAvg, setDistAvg] = useState(null) // { total, freshdesk } — avg across distributed weeks
+
+  useEffect(() => {
+    if (!tasks.length) return
+    const freshdeskFillIds = new Set(
+      tasks.filter(t => t.is_fill && t.name.toLowerCase().includes('freshdesk')).map(t => t.id)
+    )
+    api.getDistribution().then(rows => {
+      // Sum per week: total and freshdesk-only
+      const weekTotal = {}, weekFreshdesk = {}
+      for (const row of rows) {
+        weekTotal[row.week_number] = (weekTotal[row.week_number] || 0) + row.hours_per_week
+        if (freshdeskFillIds.has(row.task_id)) {
+          weekFreshdesk[row.week_number] = (weekFreshdesk[row.week_number] || 0) + row.hours_per_week
+        }
+      }
+      const avg = (obj) => {
+        const vals = Object.values(obj)
+        return vals.length ? Math.round(vals.reduce((s, h) => s + h, 0) / vals.length * 2) / 2 : null
+      }
+      setDistAvg({ total: avg(weekTotal), freshdesk: avg(weekFreshdesk) })
+    }).catch(() => {})
+  }, [tasks])
 
   const addRp = () => {
     const name = newRpName.trim()
@@ -133,8 +156,26 @@ function TasksTab({ tasks, onReload }) {
     onReload()
   }
 
+  // Both from actual distribution data so week-scoped tasks and fill are handled correctly
+  const totalInclFreshdesk = distAvg?.total ?? null        // avg total distributed/week (~200h)
+  const totalExclFreshdesk = distAvg != null && distAvg.total != null && distAvg.freshdesk != null
+    ? Math.round((distAvg.total - distAvg.freshdesk) * 2) / 2
+    : null
+
   return (
     <div>
+      <div className="flex items-center gap-4 mb-4 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm">
+        <span className="text-indigo-700 font-medium">Total hrs/week:</span>
+        <span className="text-indigo-900 font-semibold">
+          {totalInclFreshdesk != null ? `${totalInclFreshdesk}h` : '—'}
+          <span className="font-normal text-indigo-500"> (incl. Freshdesk)</span>
+        </span>
+        <span className="text-gray-300">|</span>
+        <span className="text-indigo-900 font-semibold">
+          {totalExclFreshdesk != null ? `${totalExclFreshdesk}h` : '—'}
+          <span className="font-normal text-indigo-500"> (excl. Freshdesk)</span>
+        </span>
+      </div>
       <div className="flex justify-between items-center mb-4">
         <p className="text-sm text-gray-500">{tasks.length} tasks defined</p>
         <div className="flex gap-2">
@@ -152,7 +193,7 @@ function TasksTab({ tasks, onReload }) {
 
       {showRpEditor && (
         <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4">
-          <p className="text-xs font-semibold text-gray-600 mb-3">Responsible person options</p>
+          <p className="text-xs font-semibold text-gray-600 mb-3">Full-time responsible person options</p>
           <div className="flex flex-wrap gap-2 mb-3">
             {responsiblePersons.map((name) => (
               <span key={name} className="flex items-center gap-1.5 bg-white border border-gray-200 text-sm px-3 py-1 rounded-full">
@@ -267,7 +308,7 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePe
         value={form.responsible_person}
         onChange={(e) => setForm({ ...form, responsible_person: e.target.value })}
       >
-        <option value="">Responsible…</option>
+        <option value="">Full-time responsible…</option>
         {responsiblePersons.map((name) => (
           <option key={name} value={name}>{name}</option>
         ))}
@@ -317,6 +358,8 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
   const [weekNumber, setWeekNumber] = useState(1)
   const [weekAssignments, setWeekAssignments] = useState([])
   const [distribution, setDistribution] = useState([])
+  // Per-task: set of task IDs where changes apply to THIS week only (default: all weeks)
+  const [thisWeekOnly, setThisWeekOnly] = useState(new Set())
 
   const loadWeekData = useCallback(async (wn) => {
     const [a, d] = await Promise.all([
@@ -348,18 +391,20 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
     fixedMap[`${f.task_id}:${f.person_id}`] = f.hours
   }
 
-  // Index: (task_id, person_id) -> preferred_day for current week (from task_people)
+  // Index: (task_id, person_id) -> preferred_days array for current week (from task_people)
   const preferredDayMap = {}
   for (const a of weekAssignments) {
-    if (a.preferred_day != null) {
-      preferredDayMap[`${a.task_id}:${a.person_id}`] = a.preferred_day
+    if (a.preferred_days?.length) {
+      preferredDayMap[`${a.task_id}:${a.person_id}`] = a.preferred_days
     }
   }
+
+  const weeksFor = (taskId) => thisWeekOnly.has(taskId) ? [weekNumber] : [1, 2, 3, 4]
 
   const toggleAssign = async (taskId, personId, currently_assigned) => {
     const key = `${taskId}:${personId}`
     setSaving((s) => ({ ...s, [key]: true }))
-    await Promise.all([1, 2, 3, 4].map(wn =>
+    await Promise.all(weeksFor(taskId).map(wn =>
       currently_assigned
         ? api.unassignPerson(taskId, personId, wn)
         : api.assignPerson({ task_id: taskId, person_id: personId, week_number: wn })
@@ -373,11 +418,20 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
     await onReload()
   }
 
-  const updatePreferredDay = async (taskId, personId, day) => {
-    await Promise.all([1, 2, 3, 4].map(wn =>
-      api.setPreferredDay(taskId, personId, wn, day === '' ? null : Number(day))
+  const updatePreferredDays = async (taskId, personId, days) => {
+    await Promise.all(weeksFor(taskId).map(wn =>
+      api.setPreferredDays(taskId, personId, wn, days.length ? days : null)
     ))
     await loadWeekData(weekNumber)
+  }
+
+  const toggleThisWeekOnly = (taskId) => {
+    setThisWeekOnly(prev => {
+      const next = new Set(prev)
+      if (next.has(taskId)) next.delete(taskId)
+      else next.add(taskId)
+      return next
+    })
   }
 
   if (tasks.length === 0) {
@@ -401,7 +455,6 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
             </button>
           ))}
         </div>
-        <span className="ml-auto text-xs text-gray-400">Changes apply to all weeks</span>
       </div>
 
       <div className="space-y-3">
@@ -425,15 +478,28 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
 
               {isOpen && (
                 <div className="border-t border-gray-100 px-5 py-4">
-                  <p className="text-xs text-gray-500 mb-3">
-                    Who works on this task in Week {weekNumber}? Optionally pin a preferred day or set fixed hours.
-                  </p>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs text-gray-500">
+                      Who works on this task? Optionally pin a preferred day or set fixed hours.
+                    </p>
+                    <label className="flex items-center gap-2 cursor-pointer select-none ml-4 shrink-0">
+                      <span className="text-xs text-gray-500">
+                        {thisWeekOnly.has(t.id) ? `Week ${weekNumber} only` : 'All weeks'}
+                      </span>
+                      <div
+                        onClick={() => toggleThisWeekOnly(t.id)}
+                        className={`relative w-8 h-4 rounded-full transition-colors ${thisWeekOnly.has(t.id) ? 'bg-amber-400' : 'bg-indigo-500'}`}
+                      >
+                        <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${thisWeekOnly.has(t.id) ? 'translate-x-4' : ''}`} />
+                      </div>
+                    </label>
+                  </div>
                   <div className="space-y-3">
                     {people.map((p) => {
                       const isAssigned = assigned.has(p.id)
                       const key = `${t.id}:${p.id}`
                       const fixed = fixedMap[key]
-                      const preferredDay = preferredDayMap[key] ?? ''
+                      const preferredDays = preferredDayMap[key] ?? []
                       const isSaving = saving[key]
 
                       return (
@@ -468,19 +534,29 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
                                 />
                                 <span className="text-xs text-gray-400">{fixed ? 'fixed hrs' : 'auto'}</span>
                               </div>
-                              <div className="flex items-center gap-1.5">
-                                <select
-                                  value={preferredDay}
-                                  onChange={(e) => updatePreferredDay(t.id, p.id, e.target.value)}
-                                  className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                                >
-                                  {DAY_OPTIONS.map((o) => (
-                                    <option key={o.value} value={o.value}>{o.label}</option>
-                                  ))}
-                                </select>
-                                {preferredDay !== '' && (
-                                  <span className="text-xs px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded-full">pinned</span>
-                                )}
+                              <div className="flex items-center gap-1">
+                                {DAY_OPTIONS.filter(o => o.value !== '').map((o) => {
+                                  const active = preferredDays.includes(o.value)
+                                  return (
+                                    <button
+                                      key={o.value}
+                                      type="button"
+                                      onClick={() => {
+                                        const next = active
+                                          ? preferredDays.filter(d => d !== o.value)
+                                          : [...preferredDays, o.value]
+                                        updatePreferredDays(t.id, p.id, next)
+                                      }}
+                                      className={`px-2 py-0.5 rounded text-xs font-medium border transition-colors ${
+                                        active
+                                          ? 'bg-indigo-600 text-white border-indigo-600'
+                                          : 'text-gray-400 border-gray-200 hover:border-indigo-300 hover:text-indigo-500'
+                                      }`}
+                                    >
+                                      {o.label}
+                                    </button>
+                                  )
+                                })}
                               </div>
                             </>
                           )}
@@ -584,7 +660,7 @@ function DistributeTab({ tasks, people }) {
 
           {/* Per-task distribution */}
           <div className="space-y-3 mb-6">
-            {preview.tasks.map((t) => (
+            {[...preview.tasks].sort((a, b) => a.task_name.localeCompare(b.task_name)).map((t) => (
               <div key={t.task_id} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
                 <div className="flex items-center gap-3 px-5 py-3 bg-gray-50 border-b border-gray-100">
                   <div className="w-3 h-3 rounded-full" style={{ backgroundColor: t.task_color || '#6366f1' }} />

@@ -87,7 +87,7 @@ def distribute_week(
     tasks: list[dict],       # [{task_id, task_name, task_color, hours_per_week}]
     schedule: dict,          # {dow (1–5): hours}  — only non-zero days
     person_name: str,
-    preferred_days: dict = None,  # {task_id: preferred_dow (1–5)} — overrides category rules
+    preferred_days: dict = None,  # {task_id: list[int]} preferred dows — overrides category rules
 ) -> dict:                   # {dow: {task_id: hours}}
     """
     Distribute one person's weekly task hours across their work days
@@ -126,9 +126,19 @@ def distribute_week(
 
         # ── Preferred day pin: overrides all category rules ──
         if preferred_days and tid in preferred_days:
-            preferred_dow = preferred_days[tid]
-            if preferred_dow in work_dows:
-                alloc(preferred_dow, tid, hrs)
+            pinned = preferred_days[tid]
+            if isinstance(pinned, int):  # backward-compat
+                pinned = [pinned]
+            valid = [d for d in pinned if d in work_dows]
+            if valid:
+                rem = hrs
+                for i, dow in enumerate(valid):
+                    if i == len(valid) - 1:
+                        alloc(dow, tid, round_half(rem))
+                    else:
+                        share = round_half(hrs / len(valid))
+                        alloc(dow, tid, share)
+                        rem = round_half(rem - share)
             else:
                 best = top_by_capacity(1)
                 if best:
@@ -290,7 +300,7 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
 
     bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours, location").execute().data
     bulk_dist  = supabase.table("task_distribution").select(
-        "person_id, task_id, hours_per_week, preferred_day, tasks(id, name, color, responsible_person)"
+        "person_id, task_id, hours_per_week, preferred_days, tasks(id, name, color, responsible_person)"
     ).eq("week_number", wn).execute().data
 
     sched_by_pid: dict = defaultdict(list)
@@ -327,8 +337,8 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
                 "responsible_person": row["tasks"].get("responsible_person"),
                 "hours_per_week": row["hours_per_week"],
             })
-            if row.get("preferred_day"):
-                preferred[row["task_id"]] = row["preferred_day"]
+            if row.get("preferred_days"):
+                preferred[row["task_id"]] = row["preferred_days"]
 
         alloc = distribute_week(tasks_list, schedule, pname, preferred)
 
@@ -479,7 +489,7 @@ def get_calendar_export_data(year: int = Query(...), month: int = Query(...), we
 
     bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours").execute().data
     bulk_dist  = supabase.table("task_distribution").select(
-        "person_id, week_number, task_id, hours_per_week, preferred_day, tasks(id, name, color)"
+        "person_id, week_number, task_id, hours_per_week, preferred_days, tasks(id, name, color)"
     ).execute().data
     bulk_abs   = supabase.table("absences").select("person_id, date").gte(
         "date", str(last_monday_prev)
@@ -515,8 +525,8 @@ def get_calendar_export_data(year: int = Query(...), month: int = Query(...), we
                 "task_id": row["task_id"], "task_name": row["tasks"]["name"],
                 "task_color": row["tasks"].get("color"), "hours_per_week": row["hours_per_week"],
             })
-            if row.get("preferred_day"):
-                preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_day"]
+            if row.get("preferred_days"):
+                preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_days"]
             tc = (row["tasks"].get("color") or "").lstrip("#")
             if tc and row["tasks"]["name"] not in task_color_map:
                 task_color_map[row["tasks"]["name"]] = tc
@@ -629,7 +639,7 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
 
     bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours").execute().data
     bulk_dist  = supabase.table("task_distribution").select(
-        "person_id, week_number, task_id, hours_per_week, preferred_day, tasks(id, name, color)"
+        "person_id, week_number, task_id, hours_per_week, preferred_days, tasks(id, name, color)"
     ).execute().data
     bulk_abs   = supabase.table("absences").select("person_id, date").gte(
         "date", str(last_monday_prev)
@@ -670,8 +680,8 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
                 "task_color":     row["tasks"].get("color"),
                 "hours_per_week": row["hours_per_week"],
             })
-            if row.get("preferred_day"):
-                preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_day"]
+            if row.get("preferred_days"):
+                preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_days"]
             tname = row["tasks"]["name"]
             tc    = (row["tasks"].get("color") or "").lstrip("#")
             if tc and tname not in task_color_map:
@@ -997,11 +1007,11 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
 
     # Per-week distributions (week_number 1–4), including preferred_day
     dist_res = supabase.table("task_distribution").select(
-        "week_number, task_id, hours_per_week, preferred_day, tasks(id, name, color)"
+        "week_number, task_id, hours_per_week, preferred_days, tasks(id, name, color)"
     ).eq("person_id", person_id).execute()
 
     distributions: dict[int, list] = {}
-    preferred_days: dict[int, dict] = {}  # {week_number: {task_id: preferred_day}}
+    preferred_days: dict[int, dict] = {}  # {week_number: {task_id: preferred_days list}}
     for row in dist_res.data:
         wn = row["week_number"]
         if wn not in distributions:
@@ -1012,8 +1022,8 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
             "task_color":     row["tasks"].get("color"),
             "hours_per_week": row["hours_per_week"],
         })
-        if row.get("preferred_day"):
-            preferred_days.setdefault(wn, {})[row["task_id"]] = row["preferred_day"]
+        if row.get("preferred_days"):
+            preferred_days.setdefault(wn, {})[row["task_id"]] = row["preferred_days"]
 
     # Absences: extend range to cover overflow days in both directions
     first_day = date(year, month, 1)

@@ -18,7 +18,9 @@ def get_distribution(week_number: Optional[int] = None):
 
 @router.put("/preferred-day")
 def set_preferred_day(body: PreferredDayUpdate):
+    # Store as array; empty list or None clears the pin
+    days = body.preferred_days if body.preferred_days else None
     supabase.table("task_people").update(
-        {"preferred_day": body.preferred_day}
+        {"preferred_days": days}
     ).eq("task_id", body.task_id).eq("person_id", body.person_id).eq("week_number", body.week_number).execute()
     return {"ok": True}

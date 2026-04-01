@@ -295,12 +295,12 @@ def confirm_distribution(body: DistributeRequest):
 
     # Read preferred_days from task_people (source of truth)
     assignments_res = supabase.table("task_people").select(
-        "person_id, task_id, preferred_day"
+        "person_id, task_id, preferred_days"
     ).eq("week_number", body.week_number).execute()
     preferred_map = {
-        (r["person_id"], r["task_id"]): r["preferred_day"]
+        (r["person_id"], r["task_id"]): r["preferred_days"]
         for r in assignments_res.data
-        if r.get("preferred_day") is not None
+        if r.get("preferred_days")
     }
 
     rows = []
@@ -317,8 +317,8 @@ def confirm_distribution(body: DistributeRequest):
                     "hours_per_week": hrs,
                 }
                 pd = preferred_map.get((pid, tid))
-                if pd is not None:
-                    row["preferred_day"] = pd
+                if pd:
+                    row["preferred_days"] = pd
                 rows.append(row)
 
     if not rows:

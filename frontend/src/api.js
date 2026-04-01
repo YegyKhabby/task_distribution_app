@@ -70,7 +70,7 @@ export const api = {
   getDistribution: (weekNumber) => req('GET', `/distribution${weekNumber != null ? `?week_number=${weekNumber}` : ''}`),
 
   // Preferred day pin (per week)
-  setPreferredDay: (taskId, personId, weekNumber, day) => req('PUT', '/distribution/preferred-day', { task_id: taskId, person_id: personId, week_number: weekNumber, preferred_day: day }),
+  setPreferredDays: (taskId, personId, weekNumber, days) => req('PUT', '/distribution/preferred-day', { task_id: taskId, person_id: personId, week_number: weekNumber, preferred_days: days }),
 
   // Absences
   getAbsences: (personId, fromDate) => {
