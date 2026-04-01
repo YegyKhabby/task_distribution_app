@@ -192,7 +192,7 @@ function formatDate(dateStr) {
 
 function DayCell({ day }) {
   const otherMonth = day.is_other_month
-  const base = `flex-1 min-w-0 p-2 min-h-[110px] ${otherMonth ? 'opacity-40' : ''}`
+  const base = `flex-1 min-w-0 p-2 min-h-[110px]`
 
   if (!day.is_work_day) {
     return (

@@ -348,11 +348,11 @@ function AssignmentsTab({ tasks, people, fixedHours, onReload }) {
     fixedMap[`${f.task_id}:${f.person_id}`] = f.hours
   }
 
-  // Index: (task_id, person_id) -> preferred_day for current week
+  // Index: (task_id, person_id) -> preferred_day for current week (from task_people)
   const preferredDayMap = {}
-  for (const d of distribution) {
-    if (d.preferred_day != null) {
-      preferredDayMap[`${d.task_id}:${d.person_id}`] = d.preferred_day
+  for (const a of weekAssignments) {
+    if (a.preferred_day != null) {
+      preferredDayMap[`${a.task_id}:${a.person_id}`] = a.preferred_day
     }
   }
 

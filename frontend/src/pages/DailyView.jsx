@@ -8,12 +8,14 @@ function exportDayExcel(data, dateStr) {
   const d = new Date(dateStr + 'T00:00:00')
   const label = `${data.day_name} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]} ${d.getFullYear()}`
 
-  // Collect unique person names in order of first appearance
+  // Collect unique person names + their location in order of first appearance
   const personNames = []
+  const personLocation = {}
   const seen = new Set()
   for (const t of data.tasks) {
     for (const p of t.people) {
       if (!seen.has(p.person_name)) { personNames.push(p.person_name); seen.add(p.person_name) }
+      if (!personLocation[p.person_name]) personLocation[p.person_name] = p.location || 'office'
     }
   }
 
@@ -37,6 +39,21 @@ function exportDayExcel(data, dateStr) {
   })
   row++
 
+  // Location sub-row
+  const locStyle = (loc) => ({
+    fill: { fgColor: { rgb: loc === 'home' ? 'CCFBF1' : 'E0E7FF' } },
+    font: { sz: 9, color: { rgb: loc === 'home' ? '0F766E' : '3730A3' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  })
+  ws[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: '', t: 's', s: {} }
+  ws[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: '', t: 's', s: {} }
+  personNames.forEach((pname, ci) => {
+    const loc = personLocation[pname] || 'office'
+    ws[XLSX.utils.encode_cell({ r: row, c: 2 + ci })] = { v: loc === 'home' ? 'Home' : 'Office', t: 's', s: locStyle(loc) }
+  })
+  ws[XLSX.utils.encode_cell({ r: row, c: 2 + personNames.length })] = { v: '', t: 's', s: {} }
+  row++
+
   // Task rows
   for (const t of data.tasks) {
     const personHours = Object.fromEntries(t.people.map(p => [p.person_name, p.hours]))
@@ -54,6 +71,23 @@ function exportDayExcel(data, dateStr) {
     ws[XLSX.utils.encode_cell({ r: row, c: 2 + personNames.length })] = { v: t.total_hours, t: 'n', s: boldStyle }
     row++
   }
+
+  // Totals row
+  const personTotals = {}
+  for (const t of data.tasks) {
+    for (const p of t.people) {
+      personTotals[p.person_name] = (personTotals[p.person_name] || 0) + p.hours
+    }
+  }
+  const grandTotal = Object.values(personTotals).reduce((s, h) => s + h, 0)
+  const totalRowStyle = { font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: 'F1F5F9' } }, alignment: { horizontal: 'center', vertical: 'center' } }
+  ws[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: 'Total', t: 's', s: { ...totalRowStyle, alignment: { vertical: 'center' } } }
+  ws[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: '', t: 's', s: totalRowStyle }
+  personNames.forEach((pname, ci) => {
+    ws[XLSX.utils.encode_cell({ r: row, c: 2 + ci })] = { v: personTotals[pname] || 0, t: 'n', s: totalRowStyle }
+  })
+  ws[XLSX.utils.encode_cell({ r: row, c: 2 + personNames.length })] = { v: grandTotal, t: 'n', s: totalRowStyle }
+  row++
 
   // Absent footer
   if (data.absent_people && data.absent_people.length > 0) {
@@ -234,6 +268,9 @@ export default function DailyView() {
                       >
                         <span className="font-medium text-gray-800">{p.person_name}</span>
                         <span className="text-gray-500">{p.hours}h</span>
+                        <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${p.location === 'home' ? 'bg-teal-100 text-teal-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                          {p.location === 'home' ? 'Home' : 'Office'}
+                        </span>
                       </span>
                     ))}
                   </div>

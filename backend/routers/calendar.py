@@ -288,7 +288,7 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
     abs_res = supabase.table("absences").select("person_id").eq("date", str(date_obj)).execute()
     absent_ids = {r["person_id"] for r in abs_res.data}
 
-    bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours").execute().data
+    bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours, location").execute().data
     bulk_dist  = supabase.table("task_distribution").select(
         "person_id, task_id, hours_per_week, preferred_day, tasks(id, name, color, responsible_person)"
     ).eq("week_number", wn).execute().data
@@ -310,9 +310,12 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
         pname = person["name"]
 
         schedule = {r["day_of_week"]: r["hours"] for r in sched_by_pid[pid] if r["hours"] > 0}
+        location_map = {r["day_of_week"]: (r.get("location") or "office") for r in sched_by_pid[pid]}
 
         if not schedule.get(dow, 0) or pid in absent_ids:
             continue  # person doesn't work this day or is absent
+
+        location = location_map.get(dow, "office")
 
         tasks_list = []
         preferred  = {}
@@ -345,7 +348,7 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
                     "people":             [],
                 }
             task_data[tid]["total_hours"] = round(task_data[tid]["total_hours"] + hrs, 2)
-            task_data[tid]["people"].append({"person_name": pname, "hours": hrs})
+            task_data[tid]["people"].append({"person_name": pname, "hours": hrs, "location": location})
 
     tasks_sorted = sorted(task_data.values(), key=lambda t: t["total_hours"], reverse=True)
     absent_names = [p["name"] for p in all_people if p["id"] in absent_ids]
@@ -1012,12 +1015,17 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
         if row.get("preferred_day"):
             preferred_days.setdefault(wn, {})[row["task_id"]] = row["preferred_day"]
 
-    # Absences for the month
+    # Absences: extend range to cover overflow days in both directions
     first_day = date(year, month, 1)
     last_day  = date(year, month, cal_module.monthrange(year, month)[1])
+    _month_mondays = get_mondays_in_month(year, month)
+    # End: Friday of last week (may spill into next month, e.g. March 30 week → April 3)
+    abs_end   = max(last_day, _month_mondays[-1] + timedelta(days=4)) if _month_mondays else last_day
+    # Start: Monday of week before first Monday (covers include_overflow prev-month days)
+    abs_start = (_month_mondays[0] - timedelta(weeks=1)) if _month_mondays else first_day
     absences_res = supabase.table("absences").select("date").eq("person_id", person_id).gte(
-        "date", str(first_day)
-    ).lte("date", str(last_day)).execute()
+        "date", str(abs_start)
+    ).lte("date", str(abs_end)).execute()
     absent_dates = {row["date"] for row in absences_res.data}
 
     # Build weeks

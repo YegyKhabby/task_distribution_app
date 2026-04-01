@@ -1,11 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from database import supabase
 from datetime import date, timedelta
 from collections import defaultdict
-
-
-def round_half(x: float) -> float:
-    return round(x * 2) / 2
+from routers.calendar import distribute_week
 
 router = APIRouter(prefix="/impact", tags=["impact"])
 
@@ -20,10 +17,13 @@ def determine_week_number(week_start_date: date, week_start_offset: int = 1) -> 
     Return 1–4: the working-week position within the month using the 4-week
     wrap cycle. week_start_offset shifts which rotation week the first Monday
     of the month maps to (default 1).
+    5th+ weeks (index >= 4) default to W2, matching the Calendar page behaviour.
     """
     first_day = week_start_date.replace(day=1)
     first_monday = first_day + timedelta(days=(7 - first_day.weekday()) % 7)
     index = (week_start_date - first_monday).days // 7
+    if index >= 4:
+        return 2
     return ((index + week_start_offset - 1) % 4) + 1
 
 
@@ -31,13 +31,13 @@ def get_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
-def compute_week_impact(week_start: date, person_ids: set = None) -> dict:
+def compute_week_impact(week_start: date, person_ids: set = None, week_start_offset: int = 1) -> dict:
     """
     Compute unallocated hours and coverage options for a given week.
     If person_ids is provided, only compute for those people.
     """
     week_end = week_start + timedelta(days=4)
-    week_number = determine_week_number(week_start)
+    week_number = determine_week_number(week_start, week_start_offset)
 
     # 1. Find absences for that week
     absences_res = supabase.table("absences").select(
@@ -74,7 +74,6 @@ def compute_week_impact(week_start: date, person_ids: set = None) -> dict:
         sched_res = supabase.table("person_schedule").select("day_of_week, hours").eq("person_id", pid).execute()
         sched = {row["day_of_week"]: row["hours"] for row in sched_res.data}
         info["schedule"] = sched
-        info["weekly_total"] = sum(sched.values()) or 1
 
     # 2. Get task distributions for all people for this week number
     dist_res = supabase.table("task_distribution").select(
@@ -140,16 +139,26 @@ def compute_week_impact(week_start: date, person_ids: set = None) -> dict:
         person = info["person"]
         absent_days = info["absent_days"]
         sched = info["schedule"]
-        weekly_total = info["weekly_total"]
 
         tasks_for_person = person_tasks.get(pid, [])
         unallocated_tasks = []
 
+        # Preferred day pins for this person (same data the Calendar uses)
+        preferred_days = {
+            d["task_id"]: d["preferred_day"]
+            for d in dist_all
+            if d["person_id"] == pid and d.get("preferred_day")
+        }
+
+        # Use the same distribute_week engine as the Calendar page —
+        # gives exact per-day task hours respecting preferred day pins and task rules
+        daily_alloc = distribute_week(tasks_for_person, sched, person["name"], preferred_days)
+        # daily_alloc: {dow (1–5): {task_id: hours}}
+
         for t in tasks_for_person:
             tid = t["task_id"]
-            # Sum the exact hours the Calendar would show for each absent day
             raw_unallocated = sum(
-                round_half(t["hours_per_week"] * sched.get(date.fromisoformat(d).weekday() + 1, 0.0) / weekly_total)
+                daily_alloc.get(date.fromisoformat(d).weekday() + 1, {}).get(tid, 0.0)
                 for d in info["absent_dates"]
             )
             makeup_hrs = makeup_index[pid].get(tid, 0.0)
@@ -209,7 +218,7 @@ def compute_week_impact(week_start: date, person_ids: set = None) -> dict:
 
 
 @router.get("/upcoming")
-def get_impact_upcoming(from_date: str):
+def get_impact_upcoming(from_date: str, week_start_offset: int = Query(default=1, ge=1, le=4)):
     """
     Return all upcoming absent people (from from_date forward) aggregated by person,
     with each person's weeks, unallocated tasks, and confirmed reallocations.
@@ -241,7 +250,7 @@ def get_impact_upcoming(from_date: str):
 
     for week_start in sorted(week_persons.keys()):
         pids = week_persons[week_start]
-        week_result = compute_week_impact(week_start, person_ids=pids)
+        week_result = compute_week_impact(week_start, person_ids=pids, week_start_offset=week_start_offset)
         reallocations = week_result["confirmed_reallocations"]
 
         for ap in week_result["absent_people"]:
@@ -272,10 +281,10 @@ def get_impact_upcoming(from_date: str):
 
 
 @router.get("/{week_start_str}")
-def get_impact(week_start_str: str):
+def get_impact(week_start_str: str, week_start_offset: int = Query(default=1, ge=1, le=4)):
     """
     Compute unallocated hours and coverage options for a given week.
     week_start_str: ISO date string for the Monday of the week (YYYY-MM-DD)
     """
     week_start = date.fromisoformat(week_start_str)
-    return compute_week_impact(week_start)
+    return compute_week_impact(week_start, week_start_offset=week_start_offset)

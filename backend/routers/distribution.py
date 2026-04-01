@@ -18,7 +18,7 @@ def get_distribution(week_number: Optional[int] = None):
 
 @router.put("/preferred-day")
 def set_preferred_day(body: PreferredDayUpdate):
-    supabase.table("task_distribution").update(
+    supabase.table("task_people").update(
         {"preferred_day": body.preferred_day}
     ).eq("task_id", body.task_id).eq("person_id", body.person_id).eq("week_number", body.week_number).execute()
     return {"ok": True}

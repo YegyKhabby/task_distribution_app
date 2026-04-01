@@ -7,7 +7,7 @@ router = APIRouter(prefix="/assignments", tags=["assignments"])
 
 @router.get("")
 def get_assignments(task_id: str = None, week_number: int = None):
-    q = supabase.table("task_people").select("*, people(id, name), tasks(id, name)")
+    q = supabase.table("task_people").select("*, people(id, name), tasks(id, name), preferred_day")
     if task_id:
         q = q.eq("task_id", task_id)
     if week_number is not None:

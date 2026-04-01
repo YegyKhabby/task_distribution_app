@@ -19,8 +19,10 @@ export default function Impact() {
   const [error, setError] = useState('')
   const [tasks, setTasks] = useState([])
   const [selectedPersonId, setSelectedPersonId] = useState(null)
+  const [makeupEntries, setMakeupEntries] = useState([])
   const [redirectForm, setRedirectForm] = useState(null)
   const [makeupForm, setMakeupForm] = useState(null)
+  const [carryForwardForm, setCarryForwardForm] = useState(null)
 
   useEffect(() => {
     api.getTasks().then(setTasks)
@@ -30,7 +32,9 @@ export default function Impact() {
     setLoading(true)
     setError('')
     try {
-      const res = await api.getImpactUpcoming(today)
+      const now = new Date()
+      const weekStartOffset = parseInt(localStorage.getItem(`week_start_${now.getFullYear()}_${now.getMonth() + 1}`) || '1', 10)
+      const res = await api.getImpactUpcoming(today, weekStartOffset)
       setData(res)
       setSelectedPersonId((prev) => {
         if (prev && res.persons.find((p) => p.person_id === prev)) return prev
@@ -45,6 +49,11 @@ export default function Impact() {
   useEffect(() => { load() }, [])
 
   const selectedPerson = data?.persons.find((p) => p.person_id === selectedPersonId)
+
+  useEffect(() => {
+    if (!selectedPersonId) return
+    api.getMakeup(selectedPersonId).then(setMakeupEntries).catch(() => {})
+  }, [selectedPersonId])
 
   return (
     <div>
@@ -90,11 +99,18 @@ export default function Impact() {
               <PersonView
                 person={selectedPerson}
                 tasks={tasks}
+                makeupEntries={makeupEntries}
                 onRedirect={(taskId, taskName, candidates, weekStart) =>
                   setRedirectForm({ taskId, taskName, candidates, absentPersonName: selectedPerson.person_name, weekStart })
                 }
                 onMakeup={() => setMakeupForm({ absentPersonId: selectedPerson.person_id, absentPersonName: selectedPerson.person_name })}
-                onRefresh={load}
+                onCarryForward={(task) =>
+                  setCarryForwardForm({ absentPersonId: selectedPerson.person_id, absentPersonName: selectedPerson.person_name, task })
+                }
+                onRefresh={() => {
+                  load()
+                  api.getMakeup(selectedPersonId).then(setMakeupEntries).catch(() => {})
+                }}
               />
             )}
           </>
@@ -118,11 +134,19 @@ export default function Impact() {
           onDone={() => { setMakeupForm(null); load() }}
         />
       )}
+
+      {carryForwardForm && (
+        <CarryForwardModal
+          {...carryForwardForm}
+          onClose={() => setCarryForwardForm(null)}
+          onDone={() => { setCarryForwardForm(null); load() }}
+        />
+      )}
     </div>
   )
 }
 
-function PersonView({ person, tasks, onRedirect, onMakeup, onRefresh }) {
+function PersonView({ person, tasks, makeupEntries, onRedirect, onMakeup, onCarryForward, onRefresh }) {
   const allDates = person.weeks.flatMap((w) => w.absent_dates).sort()
   const allReallocations = person.weeks.flatMap((w) =>
     w.confirmed_reallocations.map((r) => ({ ...r, week_start: w.week_start }))
@@ -153,6 +177,7 @@ function PersonView({ person, tasks, onRedirect, onMakeup, onRefresh }) {
             onRedirect={(taskId, taskName, candidates) =>
               onRedirect(taskId, taskName, candidates, week.week_start)
             }
+            onCarryForward={onCarryForward}
           />
         ))}
       </div>
@@ -171,8 +196,26 @@ function PersonView({ person, tasks, onRedirect, onMakeup, onRefresh }) {
                   <span className="text-gray-400 text-xs">(from {r.redirected_from.name})</span>
                 )}
                 <span className="text-xs text-gray-400">week {fmtDate(r.week_start)}</span>
-                <span className="ml-auto text-xs text-gray-400">by {r.confirmed_by}</span>
                 <DeleteReallocationButton id={r.id} onDone={onRefresh} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {makeupEntries.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-sm font-semibold text-gray-700 mb-2">Carried Forward</h3>
+          <div className="space-y-1">
+            {makeupEntries.map((m) => (
+              <div key={m.id} className="bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-2 text-sm flex items-center gap-3">
+                <span className="text-emerald-700 font-medium">{person.person_name}</span>
+                <span className="text-gray-500">will do</span>
+                <span className="font-medium">{m.task?.name || m.task_id}</span>
+                <span className="text-gray-500">— {m.hours} hrs</span>
+                <span className="text-xs text-gray-400">week of {fmtDate(m.makeup_week_start_date)}</span>
+                {m.note && <span className="text-xs text-gray-400 italic">{m.note}</span>}
+                <DeleteMakeupButton id={m.id} onDone={onRefresh} />
               </div>
             ))}
           </div>
@@ -182,7 +225,7 @@ function PersonView({ person, tasks, onRedirect, onMakeup, onRefresh }) {
   )
 }
 
-function WeekSection({ week, onRedirect }) {
+function WeekSection({ week, onRedirect, onCarryForward }) {
   const totalUnallocated = week.unallocated_tasks.reduce((s, t) => s + t.remaining_unallocated, 0)
 
   return (
@@ -210,6 +253,7 @@ function WeekSection({ week, onRedirect }) {
               key={t.task_id}
               task={t}
               onRedirect={() => onRedirect(t.task_id, t.task_name, t.coverage_candidates)}
+              onCarryForward={() => onCarryForward(t)}
             />
           ))
         )}
@@ -218,7 +262,7 @@ function WeekSection({ week, onRedirect }) {
   )
 }
 
-function TaskImpactRow({ task, onRedirect }) {
+function TaskImpactRow({ task, onRedirect, onCarryForward }) {
   const [expanded, setExpanded] = useState(false)
   const isFullyCovered = task.remaining_unallocated <= 0
 
@@ -253,6 +297,14 @@ function TaskImpactRow({ task, onRedirect }) {
               className="text-xs bg-indigo-600 text-white px-3 py-1 rounded-lg hover:bg-indigo-700"
             >
               Confirm Redirect →
+            </button>
+          )}
+          {!isFullyCovered && (
+            <button
+              onClick={onCarryForward}
+              className="text-xs border border-emerald-300 text-emerald-700 px-3 py-1 rounded-lg hover:bg-emerald-50"
+            >
+              Carry forward →
             </button>
           )}
           {task.coverage_candidates.length > 0 && (
@@ -295,7 +347,6 @@ function RedirectModal({ taskId, taskName, absentPersonName, candidates, weekSta
     covering_person_id: candidates[0]?.person_id || '',
     redirected_from_task_id: '',
     hours: '',
-    confirmed_by: '',
   })
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -305,7 +356,6 @@ function RedirectModal({ taskId, taskName, absentPersonName, candidates, weekSta
   const submit = async () => {
     if (!form.covering_person_id) { setError('Select a person'); return }
     if (!form.hours || Number(form.hours) <= 0) { setError('Enter valid hours'); return }
-    if (!form.confirmed_by.trim()) { setError('Manager name required'); return }
     setSaving(true)
     try {
       await api.createReallocation({
@@ -314,7 +364,7 @@ function RedirectModal({ taskId, taskName, absentPersonName, candidates, weekSta
         task_id: taskId,
         redirected_from_task_id: form.redirected_from_task_id || null,
         hours: Number(form.hours),
-        confirmed_by: form.confirmed_by.trim(),
+        confirmed_by: '',
       })
       onDone()
     } catch (e) {
@@ -373,17 +423,6 @@ function RedirectModal({ taskId, taskName, absentPersonName, candidates, weekSta
             value={form.hours}
             onChange={(e) => setForm({ ...form, hours: e.target.value })}
             placeholder="e.g. 4"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Confirmed by (manager name)</label>
-          <input
-            type="text"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            value={form.confirmed_by}
-            onChange={(e) => setForm({ ...form, confirmed_by: e.target.value })}
-            placeholder="Manager name"
           />
         </div>
 
@@ -510,6 +549,93 @@ function MakeupModal({ absentPersonId, absentPersonName, tasks, onClose, onDone 
   )
 }
 
+function CarryForwardModal({ absentPersonId, absentPersonName, task, onClose, onDone }) {
+  const [form, setForm] = useState({
+    makeup_week_start_date: '',
+    hours: String(task.raw_unallocated_hours),
+    note: '',
+  })
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const submit = async () => {
+    if (!form.makeup_week_start_date) { setError('Select a target week'); return }
+    if (!form.hours || Number(form.hours) <= 0) { setError('Enter valid hours'); return }
+    setSaving(true)
+    try {
+      await api.createMakeup({
+        absent_person_id: absentPersonId,
+        task_id: task.task_id,
+        makeup_week_start_date: form.makeup_week_start_date,
+        hours: Number(form.hours),
+        note: form.note || null,
+      })
+      onDone()
+    } catch (e) {
+      setError(e.message)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title={`Carry Forward — ${task.task_name}`} onClose={onClose}>
+      <p className="text-sm text-gray-500 mb-4">
+        <strong>{absentPersonName}</strong> will do this task themselves in a future week.
+      </p>
+
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Target week (Monday)</label>
+          <input
+            type="date"
+            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+            value={form.makeup_week_start_date}
+            onChange={(e) => setForm({ ...form, makeup_week_start_date: e.target.value })}
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Hours</label>
+          <input
+            type="number"
+            min={0.5}
+            step={0.5}
+            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+            value={form.hours}
+            onChange={(e) => setForm({ ...form, hours: e.target.value })}
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Note (optional)</label>
+          <input
+            type="text"
+            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+            value={form.note}
+            onChange={(e) => setForm({ ...form, note: e.target.value })}
+            placeholder="Any context"
+          />
+        </div>
+
+        {error && <p className="text-red-500 text-sm">{error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={submit}
+            disabled={saving}
+            className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Confirm'}
+          </button>
+          <button onClick={onClose} className="text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-100">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function DeleteReallocationButton({ id, onDone }) {
   const [del, setDel] = useState(false)
   const handleDelete = async () => {
@@ -519,7 +645,22 @@ function DeleteReallocationButton({ id, onDone }) {
     onDone()
   }
   return (
-    <button onClick={handleDelete} disabled={del} className="text-xs text-red-400 hover:text-red-600 ml-2">
+    <button onClick={handleDelete} disabled={del} className="text-xs text-red-400 hover:text-red-600 ml-auto">
+      ×
+    </button>
+  )
+}
+
+function DeleteMakeupButton({ id, onDone }) {
+  const [del, setDel] = useState(false)
+  const handleDelete = async () => {
+    if (!confirm('Remove this carry-forward entry?')) return
+    setDel(true)
+    await api.deleteMakeup(id)
+    onDone()
+  }
+  return (
+    <button onClick={handleDelete} disabled={del} className="text-xs text-red-400 hover:text-red-600 ml-auto">
       ×
     </button>
   )

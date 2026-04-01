@@ -293,6 +293,16 @@ def confirm_distribution(body: DistributeRequest):
         for o in body.overrides:
             override_map[(o["person_id"], o["task_id"])] = o["hours"]
 
+    # Read preferred_days from task_people (source of truth)
+    assignments_res = supabase.table("task_people").select(
+        "person_id, task_id, preferred_day"
+    ).eq("week_number", body.week_number).execute()
+    preferred_map = {
+        (r["person_id"], r["task_id"]): r["preferred_day"]
+        for r in assignments_res.data
+        if r.get("preferred_day") is not None
+    }
+
     rows = []
     for task in preview["tasks"]:
         tid = task["task_id"]
@@ -300,12 +310,16 @@ def confirm_distribution(body: DistributeRequest):
             pid = d["person_id"]
             hrs = override_map.get((pid, tid), d["hours"])
             if hrs > 0:
-                rows.append({
+                row = {
                     "person_id": pid,
                     "task_id": tid,
                     "week_number": body.week_number,
                     "hours_per_week": hrs,
-                })
+                }
+                pd = preferred_map.get((pid, tid))
+                if pd is not None:
+                    row["preferred_day"] = pd
+                rows.append(row)
 
     if not rows:
         raise HTTPException(400, "Nothing to save — assign people to tasks first")

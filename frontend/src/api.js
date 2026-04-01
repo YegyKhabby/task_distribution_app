@@ -84,8 +84,8 @@ export const api = {
   deleteAbsence: (id) => req('DELETE', `/absences/${id}`),
 
   // Impact
-  getImpact: (weekStart) => req('GET', `/impact/${weekStart}`),
-  getImpactUpcoming: (fromDate) => req('GET', `/impact/upcoming?from_date=${fromDate}`),
+  getImpact: (weekStart, weekStartOffset = 1) => req('GET', `/impact/${weekStart}?week_start_offset=${weekStartOffset}`),
+  getImpactUpcoming: (fromDate, weekStartOffset = 1) => req('GET', `/impact/upcoming?from_date=${fromDate}&week_start_offset=${weekStartOffset}`),
 
   // Reallocations
   getReallocations: (weekStart) => req('GET', `/reallocations${weekStart ? `?week_start_date=${weekStart}` : ''}`),
