@@ -1,23 +1,90 @@
 import { useState, useEffect, useCallback } from 'react'
+import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+
+function exportTasksExcel(tasks, people, distribution, weekNumber) {
+  const distMap = {}
+  for (const d of distribution) {
+    if (!distMap[d.person_id]) distMap[d.person_id] = {}
+    distMap[d.person_id][d.task_id] = d.hours_per_week
+  }
+  const sorted = [...tasks].sort((a, b) => (a.priority ?? 99) - (b.priority ?? 99))
+  const HDR = { fill: { fgColor: { rgb: '312E81' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+  const TOT = { fill: { fgColor: { rgb: 'F0FDF4' } }, font: { bold: true, color: { rgb: '166534' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+  const NUM = { alignment: { horizontal: 'center', vertical: 'center' }, font: { sz: 10 } }
+  const LEFT = { alignment: { horizontal: 'left', vertical: 'center' }, font: { sz: 10 } }
+  const FIXED = 6  // Name, Priority, Hrs/week, Week scope, Responsible, Rule
+  const ncols = FIXED + people.length + 1
+  const ws = {}
+  const setCell = (r, c, v, t, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} } }
+
+  // Title row
+  setCell(0, 0, `Task Distribution — Week ${weekNumber}`, 's', { fill: { fgColor: { rgb: '312E81' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 12 }, alignment: { horizontal: 'left', vertical: 'center' } })
+  for (let c = 1; c < ncols; c++) setCell(0, c, '', 's', { fill: { fgColor: { rgb: '312E81' } } })
+
+  // Header row
+  const headers = ['Task', 'Priority', 'Hrs/week', 'Week scope', 'Responsible', 'Rule', ...people.map(p => p.name), 'Total']
+  headers.forEach((h, c) => setCell(1, c, h, 's', HDR))
+
+  // Task rows
+  const personColTotals = new Array(people.length).fill(0)
+  let grandTotal = 0
+  for (let ri = 0; ri < sorted.length; ri++) {
+    const t = sorted[ri]
+    const colorHex = (t.color || '').replace('#', '')
+    const taskStyle = colorHex
+      ? { fill: { fgColor: { rgb: colorHex } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } }
+      : { ...LEFT, font: { bold: true, sz: 10 } }
+    setCell(ri + 2, 0, t.name, 's', taskStyle)
+    setCell(ri + 2, 1, t.priority ?? '', t.priority != null ? 'n' : 's', NUM)
+    setCell(ri + 2, 2, t.is_fill ? '—' : (t.weekly_hours_target || 0), t.is_fill ? 's' : 'n', NUM)
+    setCell(ri + 2, 3, t.week_scope === 'both' ? 'All' : (t.week_scope || ''), 's', NUM)
+    setCell(ri + 2, 4, t.responsible_person || '', 's', LEFT)
+    setCell(ri + 2, 5, t.schedule_rule || '', 's', LEFT)
+    let taskRowTotal = 0
+    people.forEach((p, i) => {
+      const hrs = (distMap[p.id] || {})[t.id] || 0
+      personColTotals[i] += hrs
+      taskRowTotal += hrs
+      setCell(ri + 2, FIXED + i, hrs > 0 ? hrs : '', hrs > 0 ? 'n' : 's', NUM)
+    })
+    setCell(ri + 2, ncols - 1, taskRowTotal > 0 ? taskRowTotal : '', taskRowTotal > 0 ? 'n' : 's', { ...NUM, font: { bold: true, sz: 10 } })
+    grandTotal += taskRowTotal
+  }
+
+  // Totals row
+  const totRow = sorted.length + 2
+  setCell(totRow, 0, 'Total', 's', { ...TOT, alignment: { horizontal: 'left', vertical: 'center' } })
+  for (let c = 1; c < FIXED; c++) setCell(totRow, c, '', 's', TOT)
+  people.forEach((p, i) => setCell(totRow, FIXED + i, personColTotals[i] > 0 ? personColTotals[i] : '', personColTotals[i] > 0 ? 'n' : 's', TOT))
+  setCell(totRow, ncols - 1, grandTotal, 'n', TOT)
+
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totRow, c: ncols - 1 } })
+  ws['!cols'] = [{ wch: 26 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 16 }, ...people.map(() => ({ wch: 10 })), { wch: 8 }]
+  ws['!freeze'] = { xSplit: 1, ySplit: 2 }
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, `Week ${weekNumber}`)
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = `tasks_week${weekNumber}.xlsx`; a.click()
+  URL.revokeObjectURL(url)
+}
 
 const TABS = ['Tasks', 'Distribute']
 const COLORS = ['#6366f1', '#f97316', '#10b981', '#0ea5e9', '#ec4899', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#a78bfa']
-const DEFAULT_RESPONSIBLE_PERSONS = ['Anastasia', 'Albana', 'Metuge', 'Moinul', 'Yash', 'Sidrit']
-const RP_STORAGE_KEY = 'responsible_persons'
 
-function loadResponsiblePersons() {
-  try {
-    const stored = localStorage.getItem(RP_STORAGE_KEY)
-    return stored ? JSON.parse(stored) : DEFAULT_RESPONSIBLE_PERSONS
-  } catch {
-    return DEFAULT_RESPONSIBLE_PERSONS
-  }
-}
-
-function saveResponsiblePersons(list) {
-  localStorage.setItem(RP_STORAGE_KEY, JSON.stringify(list))
-}
+const SCHEDULE_RULES = [
+  { value: '', label: 'No rule (default)', hint: 'System decides based on available capacity' },
+  { value: 'proportional', label: 'Proportional', hint: 'Hours split based on how long each work day is' },
+  { value: 'equal_per_day', label: 'Equal per day', hint: 'Same amount of hours on every work day' },
+  { value: 'one_day', label: 'One day', hint: 'All hours on the best available day. Splits if needed' },
+  { value: 'do_not_split', label: 'Do not split', hint: 'All hours on one day — warns if capacity does not allow it' },
+  { value: 'two_days', label: 'Two days', hint: 'Split across the 2 best-capacity days' },
+  { value: 'flexible_days', label: 'Flexible days', hint: '2 days if capacity fits, expands to 3 if needed' },
+  { value: 'first_work_day', label: 'First work day', hint: "All hours on the first working day of the person's week" },
+]
 
 export default function Manager() {
   const [tab, setTab] = useState('Tasks')
@@ -80,11 +147,15 @@ const DAY_OPTIONS = [
 function TasksTab({ tasks, people, fixedHours, onReload }) {
   // ── Task editing state ──
   const [editing, setEditing] = useState(null)
-  const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', week_scope: 'both', is_fill: false, responsible_person: '' })
+  const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', week_scope: 'both', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
   const [formError, setFormError] = useState('')
-  const [responsiblePersons, setResponsiblePersons] = useState(loadResponsiblePersons)
+  const [responsiblePersons, setResponsiblePersons] = useState([])
   const [showRpEditor, setShowRpEditor] = useState(false)
   const [newRpName, setNewRpName] = useState('')
+
+  useEffect(() => {
+    api.getResponsiblePersons().then(setResponsiblePersons)
+  }, [])
 
   // ── Assignment state ──
   const [expanded, setExpanded] = useState(null)
@@ -163,30 +234,30 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
     : null
 
   // ── Responsible persons ──
-  const addRp = () => {
+  const addRp = async () => {
     const name = newRpName.trim()
-    if (!name || responsiblePersons.includes(name)) return
-    const updated = [...responsiblePersons, name]
-    setResponsiblePersons(updated)
-    saveResponsiblePersons(updated)
-    setNewRpName('')
+    if (!name) return
+    try {
+      const created = await api.createResponsiblePerson(name)
+      setResponsiblePersons(prev => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)))
+      setNewRpName('')
+    } catch (e) { alert(e.message) }
   }
 
-  const removeRp = (name) => {
-    const updated = responsiblePersons.filter((n) => n !== name)
-    setResponsiblePersons(updated)
-    saveResponsiblePersons(updated)
+  const removeRp = async (id) => {
+    await api.deleteResponsiblePerson(id)
+    setResponsiblePersons(prev => prev.filter(p => p.id !== id))
   }
 
   // ── Task CRUD ──
   const startAdd = () => {
-    setForm({ name: '', weekly_hours_target: '', color: COLORS[Math.floor(Math.random() * COLORS.length)], priority: tasks.length + 1, week_scope: 'both', is_fill: false, responsible_person: '' })
+    setForm({ name: '', weekly_hours_target: '', color: COLORS[Math.floor(Math.random() * COLORS.length)], priority: tasks.length + 1, week_scope: 'both', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
     setEditing('new')
     setFormError('')
   }
 
   const startEdit = (t) => {
-    setForm({ name: t.name, weekly_hours_target: t.weekly_hours_target, color: t.color || COLORS[0], priority: t.priority || '', week_scope: t.week_scope || 'both', is_fill: t.is_fill || false, responsible_person: t.responsible_person || '' })
+    setForm({ name: t.name, weekly_hours_target: t.weekly_hours_target, color: t.color || COLORS[0], priority: t.priority || '', week_scope: t.week_scope || 'both', is_fill: t.is_fill || false, responsible_person: t.responsible_person || '', schedule_rule: t.schedule_rule || '', split_equally: t.split_equally || false })
     setEditing(t.id)
     setFormError('')
   }
@@ -202,6 +273,8 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
       week_scope: form.week_scope,
       is_fill: form.is_fill,
       responsible_person: form.responsible_person || null,
+      schedule_rule: form.is_fill ? null : (form.schedule_rule || null),
+      split_equally: form.is_fill ? false : form.split_equally,
     }
     try {
       if (editing === 'new') await api.createTask(data)
@@ -288,10 +361,16 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
         </div>
         <div className="flex gap-2 ml-auto">
           <button
+            onClick={() => exportTasksExcel(tasks, people, distribution, weekNumber)}
+            className="text-sm text-gray-600 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
+          >
+            Download Excel
+          </button>
+          <button
             onClick={() => setShowRpEditor((v) => !v)}
             className="text-sm text-gray-500 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
           >
-            Manage people
+            Full-timers
           </button>
           <button onClick={startAdd} className="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-indigo-700">
             + Add Task
@@ -304,10 +383,10 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
         <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-4">
           <p className="text-xs font-semibold text-gray-600 mb-3">Full-time responsible person options</p>
           <div className="flex flex-wrap gap-2 mb-3">
-            {responsiblePersons.map((name) => (
-              <span key={name} className="flex items-center gap-1.5 bg-white border border-gray-200 text-sm px-3 py-1 rounded-full">
-                {name}
-                <button onClick={() => removeRp(name)} className="text-gray-400 hover:text-red-500 leading-none">×</button>
+            {responsiblePersons.map((rp) => (
+              <span key={rp.id} className="flex items-center gap-1.5 bg-white border border-gray-200 text-sm px-3 py-1 rounded-full">
+                {rp.name}
+                <button onClick={() => removeRp(rp.id)} className="text-gray-400 hover:text-red-500 leading-none">×</button>
               </span>
             ))}
           </div>
@@ -346,8 +425,15 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
                   <span className="font-medium text-gray-900 truncate">{t.name}</span>
                   {t.is_fill
                     ? <span className="text-xs text-emerald-600 font-medium shrink-0">fills spare</span>
-                    : <span className="text-sm text-gray-500 shrink-0">{t.weekly_hours_target}h/wk</span>
+                    : t.weekly_hours_target > 0
+                      ? <span className="text-sm text-gray-500 shrink-0">{t.weekly_hours_target}h/wk</span>
+                      : <span className="text-xs text-amber-600 font-medium shrink-0" title="No hours set — task will be skipped in distribution">⚠ no hours set</span>
                   }
+                  {t.schedule_rule && !t.is_fill && (
+                    <span className="text-xs text-indigo-400 shrink-0" title={SCHEDULE_RULES.find(r => r.value === t.schedule_rule)?.hint}>
+                      {SCHEDULE_RULES.find(r => r.value === t.schedule_rule)?.label}
+                    </span>
+                  )}
                   {t.priority && <span className="text-xs text-gray-400 shrink-0">P{t.priority}</span>}
                   <span className="text-xs text-gray-400 shrink-0">
                     {t.week_scope === 'W1' ? 'W1 only' : t.week_scope === 'W234' ? 'W2–4 only' : ''}
@@ -378,7 +464,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
                     error={formError}
                     onSave={save}
                     onCancel={() => { setEditing(null); setExpanded(null) }}
-                    responsiblePersons={responsiblePersons}
+                    responsiblePersons={responsiblePersons.map(rp => rp.name)}
                   />
                 </div>
                 <div className="px-5 py-4">
@@ -386,17 +472,31 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
                     <p className="text-xs text-gray-500">
                       Assign people, set fixed hours, or pin preferred days.
                     </p>
-                    <label className="flex items-center gap-2 cursor-pointer select-none ml-4 shrink-0">
-                      <span className="text-xs text-gray-500">
-                        {thisWeekOnly.has(t.id) ? `Week ${weekNumber} only` : 'All weeks'}
-                      </span>
-                      <div
-                        onClick={() => toggleThisWeekOnly(t.id)}
-                        className={`relative w-8 h-4 rounded-full transition-colors ${thisWeekOnly.has(t.id) ? 'bg-amber-400' : 'bg-indigo-500'}`}
-                      >
-                        <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${thisWeekOnly.has(t.id) ? 'translate-x-4' : ''}`} />
-                      </div>
-                    </label>
+                    <div className="flex items-center gap-4 ml-4 shrink-0">
+                      {!t.is_fill && (
+                        <label className="flex items-center gap-1.5 cursor-pointer select-none"
+                          title="Divide target hours equally among all assigned people, ignoring their capacity">
+                          <input
+                            type="checkbox"
+                            checked={form.split_equally}
+                            onChange={(e) => setForm({ ...form, split_equally: e.target.checked })}
+                            className="w-3.5 h-3.5 rounded text-indigo-600"
+                          />
+                          <span className="text-xs text-gray-500">Split equally between people</span>
+                        </label>
+                      )}
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <span className="text-xs text-gray-500">
+                          {thisWeekOnly.has(t.id) ? `Week ${weekNumber} only` : 'All weeks'}
+                        </span>
+                        <div
+                          onClick={() => toggleThisWeekOnly(t.id)}
+                          className={`relative w-8 h-4 rounded-full transition-colors ${thisWeekOnly.has(t.id) ? 'bg-amber-400' : 'bg-indigo-500'}`}
+                        >
+                          <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${thisWeekOnly.has(t.id) ? 'translate-x-4' : ''}`} />
+                        </div>
+                      </label>
+                    </div>
                   </div>
                   <div className="space-y-3">
                     {people.map((p) => {
@@ -486,7 +586,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
               onSave={save}
               onCancel={() => setEditing(null)}
               isNew
-              responsiblePersons={responsiblePersons}
+              responsiblePersons={responsiblePersons.map(rp => rp.name)}
             />
           </div>
         )}
@@ -502,7 +602,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
 function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePersons }) {
   return (
     <div className="flex flex-wrap items-end gap-2 w-full">
-      <div className="flex flex-col gap-1 flex-1 min-w-36">
+      <div className="flex flex-col gap-1 w-full">
         <span className="text-xs text-gray-400">Task name</span>
         <input
           className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
@@ -557,13 +657,28 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePe
           ))}
         </select>
       </div>
+      {!form.is_fill && (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-gray-400">Dist. rule per person</span>
+          <select
+            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            value={form.schedule_rule}
+            onChange={(e) => setForm({ ...form, schedule_rule: e.target.value })}
+            title={SCHEDULE_RULES.find(r => r.value === form.schedule_rule)?.hint || ''}
+          >
+            {SCHEDULE_RULES.map(r => (
+              <option key={r.value} value={r.value} title={r.hint}>{r.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-400">Fill spare hrs</span>
         <label className="flex items-center gap-2 h-[34px] cursor-pointer">
           <input
             type="checkbox"
             checked={form.is_fill}
-            onChange={(e) => setForm({ ...form, is_fill: e.target.checked, weekly_hours_target: e.target.checked ? 0 : form.weekly_hours_target })}
+            onChange={(e) => setForm({ ...form, is_fill: e.target.checked, weekly_hours_target: e.target.checked ? 0 : form.weekly_hours_target, schedule_rule: e.target.checked ? '' : form.schedule_rule })}
             className="w-4 h-4 rounded text-emerald-600"
           />
         </label>
@@ -579,19 +694,28 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePe
 
 // ── Distribute Tab ─────────────────────────────────────────────────────────
 
+function nextMonday() {
+  const d = new Date()
+  const day = d.getDay() // 0=Sun,1=Mon,...
+  const daysUntilMonday = day === 1 ? 0 : (8 - day) % 7 || 7
+  d.setDate(d.getDate() + daysUntilMonday)
+  return d.toISOString().slice(0, 10)
+}
+
 function DistributeTab({ tasks, people }) {
   const [weekNumber, setWeekNumber] = useState(1)
+  const [effectiveFrom, setEffectiveFrom] = useState(nextMonday)
   const [preview, setPreview] = useState(null)
   const [loading, setLoading] = useState(false)
   const [confirming, setConfirming] = useState(false)
-  const [confirmed, setConfirmed] = useState(false)
+  const [confirmed, setConfirmed] = useState(null) // stores {saved, effective_from}
   const [error, setError] = useState('')
   const [overrides, setOverrides] = useState({})
 
   const loadPreview = async () => {
     setLoading(true)
     setError('')
-    setConfirmed(false)
+    setConfirmed(null)
     setOverrides({})
     try {
       const data = await api.previewDistribution(weekNumber)
@@ -610,8 +734,8 @@ function DistributeTab({ tasks, people }) {
         const [person_id, task_id] = key.split(':')
         return { person_id, task_id, hours: Number(hours) }
       })
-      await api.confirmDistribution({ week_number: weekNumber, overrides: overrideList.length ? overrideList : null })
-      setConfirmed(true)
+      const result = await api.confirmDistribution(weekNumber, effectiveFrom, overrideList.length ? overrideList : null)
+      setConfirmed(result)
     } catch (e) {
       setError(e.message)
     }
@@ -624,12 +748,12 @@ function DistributeTab({ tasks, people }) {
 
   return (
     <div>
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex items-center gap-4 mb-6 flex-wrap">
         <div className="flex gap-1">
           {[1, 2, 3, 4].map((wn) => (
             <button
               key={wn}
-              onClick={() => { setWeekNumber(wn); setPreview(null); setConfirmed(false) }}
+              onClick={() => { setWeekNumber(wn); setPreview(null); setConfirmed(null) }}
               className={`px-3 py-1.5 rounded-md text-sm font-medium border ${
                 weekNumber === wn ? 'bg-indigo-600 text-white border-indigo-600' : 'text-gray-600 border-gray-200 hover:bg-gray-50'
               }`}
@@ -645,6 +769,18 @@ function DistributeTab({ tasks, people }) {
         >
           {loading ? 'Computing…' : 'Preview Distribution'}
         </button>
+        <div className="flex items-center gap-2 ml-auto">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-xs text-gray-400">Effective from</span>
+            <input
+              type="date"
+              value={effectiveFrom}
+              onChange={(e) => setEffectiveFrom(e.target.value)}
+              className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            />
+          </div>
+          <span className="text-xs text-gray-400 mt-4">(snapped to Monday)</span>
+        </div>
       </div>
 
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
@@ -738,21 +874,21 @@ function DistributeTab({ tasks, people }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <button
               onClick={confirm}
-              disabled={confirming || confirmed}
+              disabled={confirming || !!confirmed}
               className="bg-green-600 text-white px-6 py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
             >
-              {confirming ? 'Saving…' : confirmed ? 'Saved!' : `Confirm & Save Week ${weekNumber}`}
+              {confirming ? 'Saving all 4 weeks…' : confirmed ? 'Saved!' : `Confirm all 4 weeks from ${effectiveFrom}`}
             </button>
             {confirmed && (
               <span className="text-green-600 text-sm font-medium">
-                Distribution saved. Go to the Matrix page to view it.
+                {confirmed.saved} rows saved — effective from {confirmed.effective_from}.
               </span>
             )}
             <p className="text-xs text-gray-400 ml-auto">
-              You can adjust hours above before confirming.
+              Adjustments above apply to Week {weekNumber} only. All 4 weeks are saved on confirm.
             </p>
           </div>
         </>

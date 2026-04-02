@@ -7,6 +7,7 @@ import calendar as cal_module
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from utils.versioned import active_schedule_rows, active_distribution_rows
 
 router = APIRouter(prefix="/calendar", tags=["calendar"])
 
@@ -21,86 +22,44 @@ def norm(name: str) -> str:
     return name.lower().strip()
 
 
-# ── Task category sets (normalized names) ────────────────────────────────────
+# ── Rule-based distribution ───────────────────────────────────────────────────
 
-SINGLE_DAY_TASKS = {
-    "amazon",
-    "confluence",
-    "cc anastasia",
-    "credit card anastasia",
-    "logo and license invoice",
-}
-
-REMINDER_TASKS = {
-    "reminder and pre-collection",
-    "reminder and pre collection",
-}
-
-TWO_DAY_TASKS = {"debt collection", "opos"}
-
-POP_TASKS = {"pops & follow-up", "pops & follow up"}
-
-DAILY_COVERAGE_TASKS = {
-    "vendor forms & cor tax forms",
-    "credit cards",
-    "data cleaning",
-}
-
-EVEN_SPREAD_TASKS = {"freshdesk sorting"}
-
-FILL_TASKS = {"freshdesk reply"}
-
-# Info telephone: allowed weekdays per person (0-indexed: 0=Mon … 4=Fri)
-INFO_TELEPHONE_SCHEDULE = {
-    "can":     {0, 4},
-    "anisha":  {0},
-    "rohit":   {0, 1, 2, 3},
-    "yeganeh": {1},
-    "ayesha":  {3, 4},
-}
-
-# Processing priority (lower number = allocated first)
-TASK_PRIORITY = {
-    "info telephone":            1,
-    "cb":                        2,
-    "travel reports + integrity": 3,
-    "vendor forms & cor tax forms": 4,
-    "data cleaning":             5,
-    "credit cards":              6,
-    "opos":                      7,
-    "reminder and pre-collection": 8,
-    "reminder and pre collection": 8,
-    "freshdesk sorting":         9,
-    "aps can and sidrit":        10,
-    "aps yeganeh and moinul":    11,
-    "freshdesk reply":           999,
+RULE_PRIORITY = {
+    "do_not_split":  1,
+    "one_day":       2,
+    "first_work_day": 3,
+    "two_days":      4,
+    "flexible_days": 5,
+    "proportional":  6,
+    "equal_per_day": 7,
+    None:            8,
 }
 
 
-def get_priority(task_name: str) -> int:
-    return TASK_PRIORITY.get(norm(task_name), 50)
+def get_rule_priority(task: dict) -> tuple:
+    rule = task.get("schedule_rule")
+    return (RULE_PRIORITY.get(rule, 8), task.get("priority") or 99)
 
 
 # ── Distribution engine ───────────────────────────────────────────────────────
 
 def distribute_week(
-    tasks: list[dict],       # [{task_id, task_name, task_color, hours_per_week}]
+    tasks: list[dict],       # [{task_id, task_name, schedule_rule, hours_per_week, is_fill, priority}]
     schedule: dict,          # {dow (1–5): hours}  — only non-zero days
     person_name: str,
-    preferred_days: dict = None,  # {task_id: list[int]} preferred dows — overrides category rules
-) -> dict:                   # {dow: {task_id: hours}}
+    preferred_days: dict = None,  # {task_id: list[int]} preferred dows — overrides rules
+) -> tuple[dict, list[str]]:     # ({dow: {task_id: hours}}, warnings)
     """
-    Distribute one person's weekly task hours across their work days
-    following the same rules as taskauto.py.
+    Distribute one person's weekly task hours across their work days using
+    the task's schedule_rule. Returns (allocations, warnings).
     """
     work_dows = sorted(schedule.keys())
+    warnings: list[str] = []
     if not work_dows or not tasks:
-        return {dow: {} for dow in work_dows}
+        return {dow: {} for dow in work_dows}, warnings
 
     day_capacity = {dow: schedule[dow] for dow in work_dows}
     allocations: dict[int, dict[str, float]] = {dow: {} for dow in work_dows}
-    person_norm = norm(person_name)
-    is_elza = "elza" in person_norm
     total_sched = sum(schedule[d] for d in work_dows)
 
     def top_by_capacity(n: int) -> list[int]:
@@ -113,18 +72,16 @@ def distribute_week(
         allocations[dow][task_id] = allocations[dow].get(task_id, 0.0) + hours
         day_capacity[dow] = max(0.0, day_capacity[dow] - hours)
 
-    sorted_tasks = sorted(tasks, key=lambda t: get_priority(t["task_name"]))
-    normal_tasks = [t for t in sorted_tasks if norm(t["task_name"]) not in FILL_TASKS]
-    fill_tasks   = [t for t in sorted_tasks if norm(t["task_name"]) in FILL_TASKS]
+    normal_tasks = sorted([t for t in tasks if not t.get("is_fill")], key=get_rule_priority)
+    fill_tasks   = [t for t in tasks if t.get("is_fill")]
 
     for t in normal_tasks:
-        tname = norm(t["task_name"])
-        tid   = t["task_id"]
-        hrs   = t["hours_per_week"]
+        tid = t["task_id"]
+        hrs = t["hours_per_week"]
         if hrs <= 0:
             continue
 
-        # ── Preferred day pin: overrides all category rules ──
+        # ── Preferred day pin: overrides all rules ──
         if preferred_days and tid in preferred_days:
             pinned = preferred_days[tid]
             if isinstance(pinned, int):  # backward-compat
@@ -145,33 +102,30 @@ def distribute_week(
                     alloc(best[0], tid, hrs)
             continue
 
-        # ── Info Telephone: fixed days per person ──
-        if "info telephone" in tname:
-            allowed_0 = None
-            for key, days in INFO_TELEPHONE_SCHEDULE.items():
-                if key in person_norm:
-                    allowed_0 = days
-                    break
-            allowed_dows = (
-                [d + 1 for d in allowed_0 if (d + 1) in work_dows]
-                if allowed_0 else work_dows
-            ) or work_dows
-            units = round(hrs / 0.5)
-            for i in range(units):
-                alloc(allowed_dows[i % len(allowed_dows)], tid, 0.5)
+        rule = t.get("schedule_rule")
 
-        # ── Single-day tasks: all hours on the day with most capacity ──
-        elif tname in SINGLE_DAY_TASKS or (tname == "opos" and is_elza):
+        # ── Do not split: all hours on one day, warn if capacity insufficient ──
+        if rule == "do_not_split":
+            best = top_by_capacity(1)
+            if best and day_capacity[best[0]] >= hrs:
+                alloc(best[0], tid, hrs)
+            else:
+                warnings.append(f"{t['task_name']} ({person_name}): could not keep on one day — not enough capacity")
+                if best:
+                    alloc(best[0], tid, hrs)
+
+        # ── One day: all hours on best available day ──
+        elif rule == "one_day":
             best = top_by_capacity(1)
             if best:
                 alloc(best[0], tid, hrs)
 
-        # ── Reminder: first working day of the week ──
-        elif tname in REMINDER_TASKS:
+        # ── First work day: all hours on first working day of person's week ──
+        elif rule == "first_work_day":
             alloc(work_dows[0], tid, hrs)
 
-        # ── Two-day split (Debt Collection, OPOs for non-Elza) ──
-        elif tname in TWO_DAY_TASKS:
+        # ── Two days: split across 2 best-capacity days ──
+        elif rule == "two_days":
             top2 = top_by_capacity(2)
             if len(top2) >= 2:
                 half = round_half(hrs / 2)
@@ -180,8 +134,8 @@ def distribute_week(
             elif top2:
                 alloc(top2[0], tid, hrs)
 
-        # ── POPs: 2-day split, expand to 3 if capacity is tight ──
-        elif tname in POP_TASKS:
+        # ── Flexible days: 2 days if capacity fits, expand to 3 if needed ──
+        elif rule == "flexible_days":
             top2 = top_by_capacity(2)
             if len(top2) >= 2 and sum(day_capacity[d] for d in top2) >= hrs:
                 half = round_half(hrs / 2)
@@ -195,15 +149,15 @@ def distribute_week(
                     alloc(dow, tid, day_hrs)
                     rem = round_half(rem - day_hrs)
 
-        # ── Even spread: Freshdesk Sorting ──
-        elif tname in EVEN_SPREAD_TASKS:
+        # ── Equal per day: same hours every work day ──
+        elif rule == "equal_per_day":
             rem = hrs
             for i, dow in enumerate(work_dows):
                 day_hrs = round_half(hrs / len(work_dows)) if i < len(work_dows) - 1 else round_half(rem)
                 alloc(dow, tid, day_hrs)
                 rem = round_half(rem - day_hrs)
 
-        # ── Default (incl. daily-coverage tasks): proportional to scheduled hours ──
+        # ── Proportional or no rule (default): proportional to scheduled hours ──
         else:
             rem = hrs
             for i, dow in enumerate(work_dows):
@@ -214,7 +168,7 @@ def distribute_week(
                     rem = round_half(rem - day_hrs)
                 alloc(dow, tid, day_hrs)
 
-    # ── Fill tasks (Freshdesk Reply): absorb remaining daily capacity ──
+    # ── Fill tasks: absorb remaining daily capacity ──
     for t in fill_tasks:
         tid = t["task_id"]
         for dow in work_dows:
@@ -222,7 +176,7 @@ def distribute_week(
             if cap > 0:
                 alloc(dow, tid, cap)
 
-    return allocations
+    return allocations, warnings
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -298,10 +252,13 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
     abs_res = supabase.table("absences").select("person_id").eq("date", str(date_obj)).execute()
     absent_ids = {r["person_id"] for r in abs_res.data}
 
-    bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours, location").execute().data
-    bulk_dist  = supabase.table("task_distribution").select(
-        "person_id, task_id, hours_per_week, preferred_days, tasks(id, name, color, responsible_person)"
+    monday_str = str(monday)
+    bulk_sched_raw = supabase.table("person_schedule").select("person_id, day_of_week, hours, location, valid_from, valid_until").execute().data
+    bulk_sched = active_schedule_rows(bulk_sched_raw, monday_str)
+    bulk_dist_raw  = supabase.table("task_distribution").select(
+        "person_id, task_id, hours_per_week, preferred_days, valid_from, tasks(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
     ).eq("week_number", wn).execute().data
+    bulk_dist = active_distribution_rows(bulk_dist_raw, monday_str)
 
     sched_by_pid: dict = defaultdict(list)
     for r in bulk_sched:
@@ -336,11 +293,14 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
                 "task_color":     row["tasks"].get("color"),
                 "responsible_person": row["tasks"].get("responsible_person"),
                 "hours_per_week": row["hours_per_week"],
+                "schedule_rule":  row["tasks"].get("schedule_rule"),
+                "is_fill":        row["tasks"].get("is_fill", False),
+                "priority":       row["tasks"].get("priority"),
             })
             if row.get("preferred_days"):
                 preferred[row["task_id"]] = row["preferred_days"]
 
-        alloc = distribute_week(tasks_list, schedule, pname, preferred)
+        alloc, _warnings = distribute_week(tasks_list, schedule, pname, preferred)
 
         for tid, hrs in alloc.get(dow, {}).items():
             if hrs <= 0:
@@ -487,21 +447,22 @@ def get_calendar_export_data(year: int = Query(...), month: int = Query(...), we
     people_res = supabase.table("people").select("id, name").eq("active", True).order("name").execute()
     all_people = people_res.data
 
-    bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours").execute().data
-    bulk_dist  = supabase.table("task_distribution").select(
-        "person_id, week_number, task_id, hours_per_week, preferred_days, tasks(id, name, color)"
+    bulk_sched_raw = supabase.table("person_schedule").select("person_id, day_of_week, hours, location, valid_from, valid_until").execute().data
+    bulk_dist_raw  = supabase.table("task_distribution").select(
+        "person_id, week_number, task_id, hours_per_week, preferred_days, valid_from, tasks(id, name, color, schedule_rule, is_fill, priority)"
     ).execute().data
     bulk_abs   = supabase.table("absences").select("person_id, date").gte(
         "date", str(last_monday_prev)
     ).lte("date", str(cur_last)).execute().data
 
     sched_by_pid: dict = defaultdict(list)
-    for r in bulk_sched:
+    for r in bulk_sched_raw:
         sched_by_pid[r["person_id"]].append(r)
 
     dist_by_pid: dict = defaultdict(list)
-    for r in bulk_dist:
+    for r in bulk_dist_raw:
         dist_by_pid[r["person_id"]].append(r)
+        tc = (r["tasks"].get("color") or "").lstrip("#")
 
     abs_by_pid: dict = defaultdict(set)
     for r in bulk_abs:
@@ -511,49 +472,58 @@ def get_calendar_export_data(year: int = Query(...), month: int = Query(...), we
     person_alloc:   dict = {}
     task_color_map: dict = {}
 
+    def _tasks_for(pid, wn, monday_str):
+        rows = active_distribution_rows(
+            [r for r in dist_by_pid[pid] if r["week_number"] == wn], monday_str
+        )
+        for r in rows:
+            tc = (r["tasks"].get("color") or "").lstrip("#")
+            if tc and r["tasks"]["name"] not in task_color_map:
+                task_color_map[r["tasks"]["name"]] = tc
+        tasks = [{"task_id": r["task_id"], "task_name": r["tasks"]["name"],
+                  "task_color": r["tasks"].get("color"), "hours_per_week": r["hours_per_week"],
+                  "schedule_rule": r["tasks"].get("schedule_rule"),
+                  "is_fill": r["tasks"].get("is_fill", False),
+                  "priority": r["tasks"].get("priority")} for r in rows]
+        preferred = {r["task_id"]: r["preferred_days"] for r in rows if r.get("preferred_days")}
+        return tasks, preferred
+
+    def _sched_for(pid, monday_str):
+        rows = active_schedule_rows(sched_by_pid[pid], monday_str)
+        return {r["day_of_week"]: r["hours"] for r in rows if r["hours"] > 0}
+
     for person in all_people:
         pid   = person["id"]
         pname = person["name"]
-        schedule = {r["day_of_week"]: r["hours"] for r in sched_by_pid[pid] if r["hours"] > 0}
-        absent   = abs_by_pid[pid]
-
-        distributions:   dict = {}
-        preferred_by_wk: dict = {}
-        for row in dist_by_pid[pid]:
-            wn = row["week_number"]
-            distributions.setdefault(wn, []).append({
-                "task_id": row["task_id"], "task_name": row["tasks"]["name"],
-                "task_color": row["tasks"].get("color"), "hours_per_week": row["hours_per_week"],
-            })
-            if row.get("preferred_days"):
-                preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_days"]
-            tc = (row["tasks"].get("color") or "").lstrip("#")
-            if tc and row["tasks"]["name"] not in task_color_map:
-                task_color_map[row["tasks"]["name"]] = tc
-
+        absent = abs_by_pid[pid]
         day_alloc: dict = {}
 
-        tasks_a = distributions.get(4, [])
-        tmap_a  = {t["task_id"]: t for t in tasks_a}
-        alloc_a = distribute_week(tasks_a, schedule, pname, preferred_by_wk.get(4))
-        for d in section_a:
-            d_str = str(d)
-            dow   = d.weekday() + 1
-            if d_str in absent:
-                day_alloc[d_str] = "absent"
-            elif schedule.get(dow, 0) > 0:
-                day_alloc[d_str] = {tmap_a[tid]["task_name"]: hrs for tid, hrs in alloc_a.get(dow, {}).items() if hrs > 0 and tid in tmap_a}
-            else:
-                day_alloc[d_str] = None
+        if section_a:
+            mon_a_str = str(last_monday_prev)
+            tasks_a, preferred_a = _tasks_for(pid, 4, mon_a_str)
+            schedule_a = _sched_for(pid, mon_a_str)
+            tmap_a = {t["task_id"]: t for t in tasks_a}
+            alloc_a, _warnings = distribute_week(tasks_a, schedule_a, pname, preferred_a)
+            for d in section_a:
+                d_str = str(d)
+                dow   = d.weekday() + 1
+                if d_str in absent:
+                    day_alloc[d_str] = "absent"
+                elif schedule_a.get(dow, 0) > 0:
+                    day_alloc[d_str] = {tmap_a[tid]["task_name"]: hrs for tid, hrs in alloc_a.get(dow, {}).items() if hrs > 0 and tid in tmap_a}
+                else:
+                    day_alloc[d_str] = None
 
         for i, monday in enumerate(all_mondays):
             if monday <= last_monday_prev:
                 continue
-            wn      = ((i + week_start - 1) % 4) + 1
-            tasks_w = distributions.get(wn, [])
-            tmap_w  = {t["task_id"]: t for t in tasks_w}
-            week_sched = {dow: hrs for dow, hrs in schedule.items() if (monday + timedelta(days=dow - 1)).month == month}
-            alloc_w = distribute_week(tasks_w, week_sched, pname, preferred_by_wk.get(wn))
+            wn         = ((i + week_start - 1) % 4) + 1
+            mon_str    = str(monday)
+            tasks_w, preferred_w = _tasks_for(pid, wn, mon_str)
+            schedule_w = _sched_for(pid, mon_str)
+            tmap_w     = {t["task_id"]: t for t in tasks_w}
+            week_sched = {dow: hrs for dow, hrs in schedule_w.items() if (monday + timedelta(days=dow - 1)).month == month}
+            alloc_w, _warnings = distribute_week(tasks_w, week_sched, pname, preferred_w)
             for dow in range(1, 6):
                 d = monday + timedelta(days=dow - 1)
                 if d.month != month:
@@ -561,7 +531,7 @@ def get_calendar_export_data(year: int = Query(...), month: int = Query(...), we
                 d_str = str(d)
                 if d_str in absent:
                     day_alloc[d_str] = "absent"
-                elif schedule.get(dow, 0) > 0:
+                elif schedule_w.get(dow, 0) > 0:
                     day_alloc[d_str] = {tmap_w[tid]["task_name"]: hrs for tid, hrs in alloc_w.get(dow, {}).items() if hrs > 0 and tid in tmap_w}
                 else:
                     day_alloc[d_str] = None
@@ -637,23 +607,22 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
     people_res = supabase.table("people").select("id, name").eq("active", True).order("name").execute()
     all_people = people_res.data
 
-    bulk_sched = supabase.table("person_schedule").select("person_id, day_of_week, hours").execute().data
-    bulk_dist  = supabase.table("task_distribution").select(
-        "person_id, week_number, task_id, hours_per_week, preferred_days, tasks(id, name, color)"
+    bulk_sched_raw2 = supabase.table("person_schedule").select("person_id, day_of_week, hours, location, valid_from, valid_until").execute().data
+    bulk_dist_raw2  = supabase.table("task_distribution").select(
+        "person_id, week_number, task_id, hours_per_week, preferred_days, valid_from, tasks(id, name, color, schedule_rule, is_fill, priority)"
     ).execute().data
     bulk_abs   = supabase.table("absences").select("person_id, date").gte(
         "date", str(last_monday_prev)
     ).lte("date", str(cur_last)).execute().data
 
-    # Group by person_id
     from collections import defaultdict
-    sched_by_pid = defaultdict(list)
-    for r in bulk_sched:
-        sched_by_pid[r["person_id"]].append(r)
+    sched_by_pid2 = defaultdict(list)
+    for r in bulk_sched_raw2:
+        sched_by_pid2[r["person_id"]].append(r)
 
-    dist_by_pid = defaultdict(list)
-    for r in bulk_dist:
-        dist_by_pid[r["person_id"]].append(r)
+    dist_by_pid2 = defaultdict(list)
+    for r in bulk_dist_raw2:
+        dist_by_pid2[r["person_id"]].append(r)
 
     abs_by_pid = defaultdict(set)
     for r in bulk_abs:
@@ -663,64 +632,67 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
     person_alloc:   dict[str, dict] = {}
     task_color_map: dict[str, str]  = {}
 
+    def _tasks_for2(pid, wn, monday_str):
+        rows = active_distribution_rows(
+            [r for r in dist_by_pid2[pid] if r["week_number"] == wn], monday_str
+        )
+        for r in rows:
+            tname = r["tasks"]["name"]
+            tc    = (r["tasks"].get("color") or "").lstrip("#")
+            if tc and tname not in task_color_map:
+                task_color_map[tname] = tc
+        tasks = [{"task_id": r["task_id"], "task_name": r["tasks"]["name"],
+                  "task_color": r["tasks"].get("color"), "hours_per_week": r["hours_per_week"],
+                  "schedule_rule": r["tasks"].get("schedule_rule"),
+                  "is_fill": r["tasks"].get("is_fill", False),
+                  "priority": r["tasks"].get("priority")} for r in rows]
+        preferred = {r["task_id"]: r["preferred_days"] for r in rows if r.get("preferred_days")}
+        return tasks, preferred
+
+    def _sched_for2(pid, monday_str):
+        rows = active_schedule_rows(sched_by_pid2[pid], monday_str)
+        return {r["day_of_week"]: r["hours"] for r in rows if r["hours"] > 0}
+
     for person in all_people:
         pid   = person["id"]
         pname = person["name"]
-
-        schedule = {r["day_of_week"]: r["hours"] for r in sched_by_pid[pid] if r["hours"] > 0}
-        absent   = abs_by_pid[pid]
-
-        distributions:   dict[int, list] = {}
-        preferred_by_wk: dict[int, dict] = {}
-        for row in dist_by_pid[pid]:
-            wn = row["week_number"]
-            distributions.setdefault(wn, []).append({
-                "task_id":        row["task_id"],
-                "task_name":      row["tasks"]["name"],
-                "task_color":     row["tasks"].get("color"),
-                "hours_per_week": row["hours_per_week"],
-            })
-            if row.get("preferred_days"):
-                preferred_by_wk.setdefault(wn, {})[row["task_id"]] = row["preferred_days"]
-            tname = row["tasks"]["name"]
-            tc    = (row["tasks"].get("color") or "").lstrip("#")
-            if tc and tname not in task_color_map:
-                task_color_map[tname] = tc
-
+        absent = abs_by_pid[pid]
         day_alloc: dict[str, object] = {}
 
-        # Section A — use week 4 distribution with the full 5-day schedule
-        tasks_a  = distributions.get(4, [])
-        tmap_a   = {t["task_id"]: t for t in tasks_a}
-        alloc_a  = distribute_week(tasks_a, schedule, pname, preferred_by_wk.get(4))
+        if section_a:
+            mon_a_str = str(last_monday_prev)
+            tasks_a, preferred_a = _tasks_for2(pid, 4, mon_a_str)
+            schedule_a = _sched_for2(pid, mon_a_str)
+            tmap_a = {t["task_id"]: t for t in tasks_a}
+            alloc_a, _warnings = distribute_week(tasks_a, schedule_a, pname, preferred_a)
+            for d in section_a:
+                d_str = str(d)
+                dow   = d.weekday() + 1
+                if d_str in absent:
+                    day_alloc[d_str] = "absent"
+                elif schedule_a.get(dow, 0) > 0:
+                    day_alloc[d_str] = {
+                        tmap_a[tid]["task_name"]: hrs
+                        for tid, hrs in alloc_a.get(dow, {}).items()
+                        if hrs > 0 and tid in tmap_a
+                    }
+                else:
+                    day_alloc[d_str] = None
 
-        for d in section_a:
-            d_str = str(d)
-            dow   = d.weekday() + 1
-            if d_str in absent:
-                day_alloc[d_str] = "absent"
-            elif schedule.get(dow, 0) > 0:
-                day_alloc[d_str] = {
-                    tmap_a[tid]["task_name"]: hrs
-                    for tid, hrs in alloc_a.get(dow, {}).items()
-                    if hrs > 0 and tid in tmap_a
-                }
-            else:
-                day_alloc[d_str] = None
-
-        # Section B — per week, filtered to current month days
         for i, monday in enumerate(all_mondays):
             if monday <= last_monday_prev:
                 continue
-            wn      = ((i + week_start - 1) % 4) + 1
-            tasks_w = distributions.get(wn, [])
-            tmap_w  = {t["task_id"]: t for t in tasks_w}
+            wn         = ((i + week_start - 1) % 4) + 1
+            mon_str    = str(monday)
+            tasks_w, preferred_w = _tasks_for2(pid, wn, mon_str)
+            schedule_w = _sched_for2(pid, mon_str)
+            tmap_w     = {t["task_id"]: t for t in tasks_w}
             week_sched = {
                 dow: hrs
-                for dow, hrs in schedule.items()
+                for dow, hrs in schedule_w.items()
                 if (monday + timedelta(days=dow - 1)).month == month
             }
-            alloc_w = distribute_week(tasks_w, week_sched, pname, preferred_by_wk.get(wn))
+            alloc_w, _warnings = distribute_week(tasks_w, week_sched, pname, preferred_w)
 
             for dow in range(1, 6):
                 d = monday + timedelta(days=dow - 1)
@@ -729,7 +701,7 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
                 d_str = str(d)
                 if d_str in absent:
                     day_alloc[d_str] = "absent"
-                elif schedule.get(dow, 0) > 0:
+                elif schedule_w.get(dow, 0) > 0:
                     day_alloc[d_str] = {
                         tmap_w[tid]["task_name"]: hrs
                         for tid, hrs in alloc_w.get(dow, {}).items()
@@ -1000,30 +972,19 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
     person_res = supabase.table("people").select("id, name").eq("id", person_id).single().execute()
     person = person_res.data
 
-    # Schedule
-    schedule_res = supabase.table("person_schedule").select("day_of_week, hours").eq("person_id", person_id).execute()
-    schedule = {row["day_of_week"]: row["hours"] for row in schedule_res.data if row["hours"] > 0}
-    weekly_total = sum(schedule.values())
+    # Schedule — all versioned rows for this person
+    schedule_res = supabase.table("person_schedule").select("day_of_week, hours, valid_from, valid_until").eq("person_id", person_id).execute()
+    all_sched_rows = [{**r, "person_id": person_id} for r in schedule_res.data]
 
-    # Per-week distributions (week_number 1–4), including preferred_day
+    # Per-week distributions — all versioned rows for this person
     dist_res = supabase.table("task_distribution").select(
-        "week_number, task_id, hours_per_week, preferred_days, tasks(id, name, color)"
+        "week_number, task_id, hours_per_week, preferred_days, valid_from, tasks(id, name, color, schedule_rule, is_fill, priority)"
     ).eq("person_id", person_id).execute()
+    all_dist_rows = [{**r, "person_id": person_id} for r in dist_res.data]
 
-    distributions: dict[int, list] = {}
-    preferred_days: dict[int, dict] = {}  # {week_number: {task_id: preferred_days list}}
-    for row in dist_res.data:
-        wn = row["week_number"]
-        if wn not in distributions:
-            distributions[wn] = []
-        distributions[wn].append({
-            "task_id":        row["task_id"],
-            "task_name":      row["tasks"]["name"],
-            "task_color":     row["tasks"].get("color"),
-            "hours_per_week": row["hours_per_week"],
-        })
-        if row.get("preferred_days"):
-            preferred_days.setdefault(wn, {})[row["task_id"]] = row["preferred_days"]
+    # We'll resolve per-week in the loop below; compute a baseline schedule for weekly_total
+    _baseline_sched = active_schedule_rows(all_sched_rows, str(date(year, month, 1)))
+    weekly_total = sum(r["hours"] for r in _baseline_sched)
 
     # Absences: extend range to cover overflow days in both directions
     first_day = date(year, month, 1)
@@ -1057,14 +1018,28 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
             week_number = 2
         else:
             week_number = ((i + week_start - 1) % 4) + 1
-        tasks_for_week = distributions.get(week_number, [])
+
+        monday_str = str(monday)
+        # Resolve active schedule and distribution for this specific week
+        active_sched = active_schedule_rows(all_sched_rows, monday_str)
+        schedule     = {r["day_of_week"]: r["hours"] for r in active_sched if r["hours"] > 0}
+        active_dist  = active_distribution_rows(
+            [r for r in all_dist_rows if r["week_number"] == week_number], monday_str
+        )
+        tasks_for_week = [{"task_id": r["task_id"], "task_name": r["tasks"]["name"],
+                           "task_color": r["tasks"].get("color"), "hours_per_week": r["hours_per_week"],
+                           "schedule_rule": r["tasks"].get("schedule_rule"),
+                           "is_fill": r["tasks"].get("is_fill", False),
+                           "priority": r["tasks"].get("priority")}
+                          for r in active_dist]
+        preferred_days_wk = {r["task_id"]: r["preferred_days"] for r in active_dist if r.get("preferred_days")}
         task_map       = {t["task_id"]: t for t in tasks_for_week}
 
         # Use the full 5-day schedule so cross-month days get allocations too
         week_schedule = dict(schedule)
 
         if week_number >= from_week:
-            allocations = distribute_week(tasks_for_week, week_schedule, person["name"], preferred_days.get(week_number))
+            allocations, _warnings = distribute_week(tasks_for_week, week_schedule, person["name"], preferred_days_wk)
         else:
             allocations = distribute_week_proportional(tasks_for_week, week_schedule)
 
@@ -1079,7 +1054,9 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
             is_work_day   = scheduled_hrs > 0
             is_absent     = str(actual_date) in absent_dates
 
-            if is_work_day and not is_absent and not is_other_month:
+            # Week-row totals should match the visible Mon-Fri row, including
+            # cross-month days that are rendered in the same week block.
+            if is_work_day and not is_absent:
                 week_total += scheduled_hrs
 
             daily_tasks = []

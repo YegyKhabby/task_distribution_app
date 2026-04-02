@@ -3,6 +3,7 @@ from database import supabase
 from datetime import date, timedelta
 from collections import defaultdict
 from routers.calendar import distribute_week
+from utils.versioned import active_schedule_rows, active_distribution_rows
 
 router = APIRouter(prefix="/impact", tags=["impact"])
 
@@ -69,17 +70,23 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
             "confirmed_reallocations": [],
         }
 
-    # Fetch schedules for absent people — same source as the Calendar page
+    week_start_str = str(week_start)
+
+    # Fetch schedules for absent people — version active for this week
     for pid, info in absent_people.items():
-        sched_res = supabase.table("person_schedule").select("day_of_week, hours").eq("person_id", pid).execute()
-        sched = {row["day_of_week"]: row["hours"] for row in sched_res.data}
+        sched_res = supabase.table("person_schedule").select(
+            "day_of_week, hours, valid_from, valid_until"
+        ).eq("person_id", pid).execute()
+        rows_with_pid = [{**r, "person_id": pid} for r in sched_res.data]
+        active = active_schedule_rows(rows_with_pid, week_start_str)
+        sched = {row["day_of_week"]: row["hours"] for row in active}
         info["schedule"] = sched
 
-    # 2. Get task distributions for all people for this week number
+    # 2. Get task distributions for all people for this week number — active version
     dist_res = supabase.table("task_distribution").select(
-        "*, people(id, name, weekly_hours), tasks(id, name, color, priority)"
+        "*, people(id, name, weekly_hours), tasks(id, name, color, priority, schedule_rule, is_fill)"
     ).eq("week_number", week_number).execute()
-    dist_all = dist_res.data
+    dist_all = active_distribution_rows(dist_res.data, week_start_str)
 
     # Index: person_id -> list of {task_id, task_name, hours_per_week}
     person_tasks: dict[str, list] = defaultdict(list)
@@ -94,6 +101,9 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
             "task_name": d["tasks"]["name"],
             "task_color": d["tasks"].get("color"),
             "hours_per_week": d["hours_per_week"],
+            "schedule_rule": d["tasks"].get("schedule_rule"),
+            "is_fill": d["tasks"].get("is_fill", False),
+            "priority": d["tasks"].get("priority"),
         })
         task_people[tid].append({
             "person_id": pid,
@@ -152,7 +162,7 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
 
         # Use the same distribute_week engine as the Calendar page —
         # gives exact per-day task hours respecting preferred day pins and task rules
-        daily_alloc = distribute_week(tasks_for_person, sched, person["name"], preferred_days)
+        daily_alloc, _warnings = distribute_week(tasks_for_person, sched, person["name"], preferred_days)
         # daily_alloc: {dow (1–5): {task_id: hours}}
 
         for t in tasks_for_person:

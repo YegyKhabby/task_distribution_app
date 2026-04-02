@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { format } from 'date-fns'
+import { format, addDays } from 'date-fns'
 import { api } from '../api'
+import XLSX from 'xlsx-js-style'
 
 function fmtDate(d) {
   return format(new Date(d + 'T12:00:00'), 'MMM d')
@@ -12,6 +13,46 @@ function fmtWeekRange(weekStart) {
   return `${format(start, 'MMM d')} – ${format(end, 'MMM d, yyyy')}`
 }
 
+function weekIndexInMonth(mondayDate) {
+  const firstDay = new Date(mondayDate.getFullYear(), mondayDate.getMonth(), 1)
+  const dow = firstDay.getDay()
+  const daysToMon = dow === 1 ? 0 : (8 - dow) % 7
+  const firstMonday = new Date(firstDay)
+  firstMonday.setDate(firstDay.getDate() + daysToMon)
+  const diffDays = Math.round((mondayDate - firstMonday) / 86400000)
+  return Math.floor(diffDays / 7) + 1
+}
+
+function upcomingWeeks(n = 10) {
+  const today = new Date()
+  const todayStr = format(today, 'yyyy-MM-dd')
+  const dow = today.getDay()
+  const daysToThisMon = dow === 0 ? -6 : 1 - dow
+  let mon = new Date(today)
+  mon.setDate(today.getDate() + daysToThisMon)
+
+  const weeks = []
+  while (weeks.length < n) {
+    const monStr = format(mon, 'yyyy-MM-dd')
+    const friStr = format(new Date(mon.getTime() + 4 * 86400000), 'yyyy-MM-dd')
+    const isCurrentWeek = monStr <= todayStr && todayStr <= friStr
+
+    // Always skip current week — already distributed
+    if (isCurrentWeek) {
+      mon = new Date(mon); mon.setDate(mon.getDate() + 7); continue
+    }
+
+    const weekIdx = weekIndexInMonth(mon)
+    const fri = new Date(mon); fri.setDate(mon.getDate() + 4)
+    weeks.push({
+      value: monStr,
+      label: `Week ${weekIdx}  ·  ${format(mon, 'MMM d')} – ${format(fri, 'MMM d, yyyy')}`,
+    })
+    mon = new Date(mon); mon.setDate(mon.getDate() + 7)
+  }
+  return weeks
+}
+
 export default function Impact() {
   const today = format(new Date(), 'yyyy-MM-dd')
   const [data, setData] = useState(null)
@@ -21,7 +62,6 @@ export default function Impact() {
   const [selectedPersonId, setSelectedPersonId] = useState(null)
   const [makeupEntries, setMakeupEntries] = useState([])
   const [redirectForm, setRedirectForm] = useState(null)
-  const [makeupForm, setMakeupForm] = useState(null)
   const [carryForwardForm, setCarryForwardForm] = useState(null)
 
   useEffect(() => {
@@ -55,11 +95,57 @@ export default function Impact() {
     api.getMakeup(selectedPersonId).then(setMakeupEntries).catch(() => {})
   }, [selectedPersonId])
 
+  const exportToExcel = async () => {
+    const [reallocations, makeupAll] = await Promise.all([
+      api.getReallocations(),
+      api.getMakeup(),
+    ])
+
+    // Sheet 1: Coverage log
+    const coverageData = (reallocations || []).map((r) => [
+      r.week_start_date,
+      r.covering_person?.name ?? r.covering_person_id,
+      r.task?.name ?? r.task_id,
+      r.hours,
+      r.redirected_from?.name ?? '',
+      r.confirmed_by ?? '',
+    ])
+    const coverageTotalHrs = coverageData.reduce((s, r) => s + (r[3] || 0), 0)
+    const coverageRows = [
+      ['Week', 'Covering person', 'Task', 'Hours', 'Redirected from task', 'Confirmed by'],
+      ...coverageData,
+      ['', '', 'Total', coverageTotalHrs, '', ''],
+    ]
+
+    // Sheet 2: Carry-forward log
+    const carryData = (makeupAll || []).map((m) => [
+      m.makeup_week_start_date,
+      m.person?.name ?? m.absent_person_id,
+      m.task?.name ?? m.task_id,
+      m.hours,
+      m.note ?? '',
+    ])
+    const carryTotalHrs = carryData.reduce((s, r) => s + (r[3] || 0), 0)
+    const carryRows = [
+      ['Target week', 'Absent person', 'Task', 'Hours', 'Note'],
+      ...carryData,
+      ['', '', 'Total', carryTotalHrs, ''],
+    ]
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(coverageRows), 'Coverage log')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(carryRows), 'Carry forward')
+    XLSX.writeFile(wb, 'impact_log.xlsx')
+  }
+
   return (
     <div>
       <div className="flex items-center gap-3 mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Impact</h1>
-        <button onClick={load} className="ml-auto text-sm text-indigo-600 hover:underline">
+        <button onClick={exportToExcel} className="ml-auto text-sm text-gray-600 border border-gray-300 rounded px-3 py-1 hover:bg-gray-50">
+          Download log
+        </button>
+        <button onClick={load} className="text-sm text-indigo-600 hover:underline">
           Refresh
         </button>
       </div>
@@ -103,9 +189,8 @@ export default function Impact() {
                 onRedirect={(taskId, taskName, candidates, weekStart) =>
                   setRedirectForm({ taskId, taskName, candidates, absentPersonName: selectedPerson.person_name, weekStart })
                 }
-                onMakeup={() => setMakeupForm({ absentPersonId: selectedPerson.person_id, absentPersonName: selectedPerson.person_name })}
                 onCarryForward={(task) =>
-                  setCarryForwardForm({ absentPersonId: selectedPerson.person_id, absentPersonName: selectedPerson.person_name, task })
+                  setCarryForwardForm({ absentPersonId: selectedPerson.person_id, absentPersonName: selectedPerson.person_name, task: task || null })
                 }
                 onRefresh={() => {
                   load()
@@ -126,18 +211,10 @@ export default function Impact() {
         />
       )}
 
-      {makeupForm && (
-        <MakeupModal
-          {...makeupForm}
-          tasks={tasks}
-          onClose={() => setMakeupForm(null)}
-          onDone={() => { setMakeupForm(null); load() }}
-        />
-      )}
-
       {carryForwardForm && (
         <CarryForwardModal
           {...carryForwardForm}
+          tasks={tasks}
           onClose={() => setCarryForwardForm(null)}
           onDone={() => { setCarryForwardForm(null); load() }}
         />
@@ -146,7 +223,7 @@ export default function Impact() {
   )
 }
 
-function PersonView({ person, tasks, makeupEntries, onRedirect, onMakeup, onCarryForward, onRefresh }) {
+function PersonView({ person, tasks, makeupEntries, onRedirect, onCarryForward, onRefresh }) {
   const allDates = person.weeks.flatMap((w) => w.absent_dates).sort()
   const allReallocations = person.weeks.flatMap((w) =>
     w.confirmed_reallocations.map((r) => ({ ...r, week_start: w.week_start }))
@@ -162,10 +239,10 @@ function PersonView({ person, tasks, makeupEntries, onRedirect, onMakeup, onCarr
           </p>
         </div>
         <button
-          onClick={onMakeup}
-          className="ml-auto text-xs text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded-lg hover:bg-indigo-50"
+          onClick={() => onCarryForward(null)}
+          className="ml-auto text-xs text-emerald-700 border border-emerald-300 px-3 py-1.5 rounded-lg hover:bg-emerald-50"
         >
-          Log Makeup
+          + Carry forward
         </button>
       </div>
 
@@ -343,34 +420,45 @@ function TaskImpactRow({ task, onRedirect, onCarryForward }) {
 }
 
 function RedirectModal({ taskId, taskName, absentPersonName, candidates, weekStart, tasks, onClose, onDone }) {
-  const [form, setForm] = useState({
-    covering_person_id: candidates[0]?.person_id || '',
-    redirected_from_task_id: '',
-    hours: '',
-  })
+  const weekOptions = upcomingWeeks()
+  const defaultWeek = weekOptions.find(w => w.value >= weekStart)?.value || weekOptions[0]?.value || weekStart
+
+  const initSelections = () => Object.fromEntries(candidates.map(c => [c.person_id, { checked: false, hours: '' }]))
+
+  const [weekDate, setWeekDate] = useState(defaultWeek)
+  const [selections, setSelections] = useState(initSelections)
+  const [confirmed, setConfirmed] = useState([])
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
 
-  const selectedCandidate = candidates.find((c) => c.person_id === form.covering_person_id)
+  const toggleCheck = (pid) => setSelections(s => ({ ...s, [pid]: { ...s[pid], checked: !s[pid].checked } }))
+  const setHours = (pid, val) => setSelections(s => ({ ...s, [pid]: { ...s[pid], hours: val } }))
+
+  const checkedCandidates = candidates.filter(c => selections[c.person_id]?.checked)
 
   const submit = async () => {
-    if (!form.covering_person_id) { setError('Select a person'); return }
-    if (!form.hours || Number(form.hours) <= 0) { setError('Enter valid hours'); return }
+    if (checkedCandidates.length === 0) { setError('Select at least one person'); return }
+    const invalid = checkedCandidates.find(c => !selections[c.person_id]?.hours || Number(selections[c.person_id].hours) <= 0)
+    if (invalid) { setError(`Enter hours for ${invalid.name}`); return }
     setSaving(true)
+    setError('')
     try {
-      await api.createReallocation({
-        week_start_date: weekStart,
-        covering_person_id: form.covering_person_id,
-        task_id: taskId,
-        redirected_from_task_id: form.redirected_from_task_id || null,
-        hours: Number(form.hours),
-        confirmed_by: '',
-      })
-      onDone()
+      for (const c of checkedCandidates) {
+        await api.createReallocation({
+          week_start_date: weekDate,
+          covering_person_id: c.person_id,
+          task_id: taskId,
+          redirected_from_task_id: null,
+          hours: Number(selections[c.person_id].hours),
+          confirmed_by: '',
+        })
+        setConfirmed(prev => [...prev, { name: c.name, hours: selections[c.person_id].hours, weekDate }])
+      }
+      setSelections(initSelections())
     } catch (e) {
       setError(e.message)
-      setSaving(false)
     }
+    setSaving(false)
   }
 
   return (
@@ -379,51 +467,73 @@ function RedirectModal({ taskId, taskName, absentPersonName, candidates, weekSta
         Covering for <strong>{absentPersonName}</strong>'s absence
       </p>
 
+      {/* Confirmed so far */}
+      {confirmed.length > 0 && (
+        <div className="mb-4 space-y-1">
+          {confirmed.map((c, i) => (
+            <div key={i} className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-1.5 text-sm">
+              <span className="text-green-700 font-medium">{c.name}</span>
+              <span className="text-gray-500">— {c.hours} hrs</span>
+              <span className="text-xs text-gray-400">{weekOptions.find(w => w.value === c.weekDate)?.label ?? c.weekDate}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="space-y-4">
         <div>
-          <label className="block text-xs text-gray-600 mb-1">Who covers</label>
+          <label className="block text-xs text-gray-600 mb-1">Week</label>
           <select
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            value={form.covering_person_id}
-            onChange={(e) => setForm({ ...form, covering_person_id: e.target.value, redirected_from_task_id: '' })}
+            value={weekDate}
+            onChange={e => setWeekDate(e.target.value)}
           >
-            {candidates.map((c) => (
-              <option key={c.person_id} value={c.person_id}>
-                {c.name} ({c.hours_on_task} hrs on task, {c.spare_hours} spare)
-              </option>
+            {weekOptions.map(w => (
+              <option key={w.value} value={w.value}>{w.label}</option>
             ))}
           </select>
         </div>
 
-        {selectedCandidate && selectedCandidate.reducible_tasks.length > 0 && (
-          <div>
-            <label className="block text-xs text-gray-600 mb-1">Reduce hours from (optional)</label>
-            <select
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              value={form.redirected_from_task_id}
-              onChange={(e) => setForm({ ...form, redirected_from_task_id: e.target.value })}
-            >
-              <option value="">— From spare capacity —</option>
-              {selectedCandidate.reducible_tasks.map((rt) => (
-                <option key={rt.task_id} value={rt.task_id}>
-                  {rt.task_name} ({rt.hours_per_week} hrs/wk)
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
         <div>
-          <label className="block text-xs text-gray-600 mb-1">Hours to redirect</label>
-          <input
-            type="number"
-            min={0.5}
-            step={0.5}
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            value={form.hours}
-            onChange={(e) => setForm({ ...form, hours: e.target.value })}
-            placeholder="e.g. 4"
-          />
+          <label className="block text-xs text-gray-600 mb-2">Who covers — select people and set hours</label>
+          <div className="space-y-2">
+            {candidates.map(c => {
+              const sel = selections[c.person_id]
+              return (
+                <div key={c.person_id} className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={sel.checked}
+                    onChange={() => toggleCheck(c.person_id)}
+                    className="mt-1 w-4 h-4 rounded text-indigo-600 flex-shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={`text-sm font-medium ${sel.checked ? 'text-gray-800' : 'text-gray-500'}`}>{c.name}</span>
+                      <span className="text-xs text-gray-400">{c.hours_on_task} hrs on task</span>
+                      {c.spare_hours > 0
+                        ? <span className="text-xs text-emerald-600">{c.spare_hours} spare</span>
+                        : <span className="text-xs text-gray-400">0 spare</span>
+                      }
+                    </div>
+                    {c.reducible_tasks.length > 0 && (
+                      <p className="text-xs text-gray-400 mt-0.5">could reduce: {c.reducible_tasks.map(r => r.task_name).join(', ')}</p>
+                    )}
+                  </div>
+                  <input
+                    type="number"
+                    min={0.5}
+                    step={0.5}
+                    placeholder="hrs"
+                    disabled={!sel.checked}
+                    value={sel.hours}
+                    onChange={e => setHours(c.person_id, e.target.value)}
+                    className="w-20 border border-gray-300 rounded-md px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400 disabled:opacity-30 flex-shrink-0"
+                  />
+                </div>
+              )
+            })}
+          </div>
         </div>
 
         {error && <p className="text-red-500 text-sm">{error}</p>}
@@ -431,11 +541,16 @@ function RedirectModal({ taskId, taskName, absentPersonName, candidates, weekSta
         <div className="flex gap-2 pt-1">
           <button
             onClick={submit}
-            disabled={saving}
+            disabled={saving || checkedCandidates.length === 0}
             className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
           >
-            {saving ? 'Confirming…' : 'Confirm Redirect'}
+            {saving ? 'Confirming…' : 'Confirm'}
           </button>
+          {confirmed.length > 0 && (
+            <button onClick={onDone} className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700">
+              Done
+            </button>
+          )}
           <button onClick={onClose} className="text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-100">
             Cancel
           </button>
@@ -445,11 +560,13 @@ function RedirectModal({ taskId, taskName, absentPersonName, candidates, weekSta
   )
 }
 
-function MakeupModal({ absentPersonId, absentPersonName, tasks, onClose, onDone }) {
+function CarryForwardModal({ absentPersonId, absentPersonName, task, tasks, onClose, onDone }) {
+  const weekOptions = upcomingWeeks()
+  // task may be null (opened from the top-level "+ Carry forward" button)
   const [form, setForm] = useState({
-    task_id: '',
-    makeup_week_start_date: '',
-    hours: '',
+    task_id: task?.task_id || '',
+    makeup_week_start_date: weekOptions[0]?.value || '',
+    hours: task ? String(task.raw_unallocated_hours) : '',
     note: '',
   })
   const [error, setError] = useState('')
@@ -457,7 +574,7 @@ function MakeupModal({ absentPersonId, absentPersonName, tasks, onClose, onDone 
 
   const submit = async () => {
     if (!form.task_id) { setError('Select a task'); return }
-    if (!form.makeup_week_start_date) { setError('Select makeup week'); return }
+    if (!form.makeup_week_start_date) { setError('Select a target week'); return }
     if (!form.hours || Number(form.hours) <= 0) { setError('Enter valid hours'); return }
     setSaving(true)
     try {
@@ -476,122 +593,39 @@ function MakeupModal({ absentPersonId, absentPersonName, tasks, onClose, onDone 
   }
 
   return (
-    <Modal title={`Log Makeup Hours — ${absentPersonName}`} onClose={onClose}>
-      <p className="text-sm text-gray-500 mb-4">
-        Record hours that <strong>{absentPersonName}</strong> will make up in a future week.
-      </p>
-
-      <div className="space-y-4">
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Task</label>
-          <select
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            value={form.task_id}
-            onChange={(e) => setForm({ ...form, task_id: e.target.value })}
-          >
-            <option value="">Select task…</option>
-            {tasks.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Makeup week (Monday)</label>
-          <input
-            type="date"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            value={form.makeup_week_start_date}
-            onChange={(e) => setForm({ ...form, makeup_week_start_date: e.target.value })}
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Hours</label>
-          <input
-            type="number"
-            min={0.5}
-            step={0.5}
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            value={form.hours}
-            onChange={(e) => setForm({ ...form, hours: e.target.value })}
-            placeholder="e.g. 4"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs text-gray-600 mb-1">Note (optional)</label>
-          <input
-            type="text"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-            value={form.note}
-            onChange={(e) => setForm({ ...form, note: e.target.value })}
-            placeholder="Any context"
-          />
-        </div>
-
-        {error && <p className="text-red-500 text-sm">{error}</p>}
-
-        <div className="flex gap-2 pt-1">
-          <button
-            onClick={submit}
-            disabled={saving}
-            className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </button>
-          <button onClick={onClose} className="text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-100">
-            Cancel
-          </button>
-        </div>
-      </div>
-    </Modal>
-  )
-}
-
-function CarryForwardModal({ absentPersonId, absentPersonName, task, onClose, onDone }) {
-  const [form, setForm] = useState({
-    makeup_week_start_date: '',
-    hours: String(task.raw_unallocated_hours),
-    note: '',
-  })
-  const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  const submit = async () => {
-    if (!form.makeup_week_start_date) { setError('Select a target week'); return }
-    if (!form.hours || Number(form.hours) <= 0) { setError('Enter valid hours'); return }
-    setSaving(true)
-    try {
-      await api.createMakeup({
-        absent_person_id: absentPersonId,
-        task_id: task.task_id,
-        makeup_week_start_date: form.makeup_week_start_date,
-        hours: Number(form.hours),
-        note: form.note || null,
-      })
-      onDone()
-    } catch (e) {
-      setError(e.message)
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Modal title={`Carry Forward — ${task.task_name}`} onClose={onClose}>
+    <Modal title={task ? `Carry Forward — ${task.task_name}` : `Carry Forward — ${absentPersonName}`} onClose={onClose}>
       <p className="text-sm text-gray-500 mb-4">
         <strong>{absentPersonName}</strong> will do this task themselves in a future week.
       </p>
 
       <div className="space-y-4">
+        {!task && (
+          <div>
+            <label className="block text-xs text-gray-600 mb-1">Task</label>
+            <select
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              value={form.task_id}
+              onChange={(e) => setForm({ ...form, task_id: e.target.value })}
+            >
+              <option value="">Select task…</option>
+              {tasks.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div>
-          <label className="block text-xs text-gray-600 mb-1">Target week (Monday)</label>
-          <input
-            type="date"
+          <label className="block text-xs text-gray-600 mb-1">Target week</label>
+          <select
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
             value={form.makeup_week_start_date}
             onChange={(e) => setForm({ ...form, makeup_week_start_date: e.target.value })}
-          />
+          >
+            {weekOptions.map(w => (
+              <option key={w.value} value={w.value}>{w.label}</option>
+            ))}
+          </select>
         </div>
 
         <div>
@@ -603,6 +637,7 @@ function CarryForwardModal({ absentPersonId, absentPersonName, task, onClose, on
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
             value={form.hours}
             onChange={(e) => setForm({ ...form, hours: e.target.value })}
+            placeholder="e.g. 4"
           />
         </div>
 

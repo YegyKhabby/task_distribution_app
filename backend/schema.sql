@@ -16,7 +16,9 @@ create table if not exists person_schedule (
   person_id uuid references people(id) on delete cascade,
   day_of_week int not null check (day_of_week between 1 and 5), -- 1=Mon … 5=Fri
   hours numeric not null default 0,
-  unique(person_id, day_of_week)
+  valid_from date not null default '2000-01-01',  -- version effective date
+  valid_until date,                                -- null = permanent
+  unique(person_id, day_of_week, valid_from)       -- replaces unique(person_id, day_of_week)
 );
 
 -- Tasks (manager defines these)
@@ -54,8 +56,9 @@ create table if not exists task_distribution (
   task_id uuid references tasks(id) on delete cascade,
   week_number int not null check (week_number between 1 and 4),
   hours_per_week numeric not null default 0,
-  preferred_day int check (preferred_day between 1 and 5),  -- 1=Mon … 5=Fri, NULL = no preference
-  unique(person_id, task_id, week_number)
+  preferred_days int[],                           -- pinned weekdays (1=Mon…5=Fri)
+  valid_from date not null default '2000-01-01',  -- version effective date
+  unique(person_id, task_id, week_number, valid_from)  -- replaces unique(person_id, task_id, week_number)
 );
 
 -- Absences (one row per calendar day)
@@ -121,35 +124,46 @@ create index if not exists deskbird_attendance_bookings_first_norm_idx on deskbi
 -- Enables RLS on all tables and adds a permissive policy so the app continues
 -- to work while blocking anonymous public access via the Supabase anon key.
 alter table people enable row level security;
+drop policy if exists "allow all" on people;
 create policy "allow all" on people for all using (true) with check (true);
 
 alter table person_schedule enable row level security;
+drop policy if exists "allow all" on person_schedule;
 create policy "allow all" on person_schedule for all using (true) with check (true);
 
 alter table tasks enable row level security;
+drop policy if exists "allow all" on tasks;
 create policy "allow all" on tasks for all using (true) with check (true);
 
 alter table task_people enable row level security;
+drop policy if exists "allow all" on task_people;
 create policy "allow all" on task_people for all using (true) with check (true);
 
 alter table task_fixed_hours enable row level security;
+drop policy if exists "allow all" on task_fixed_hours;
 create policy "allow all" on task_fixed_hours for all using (true) with check (true);
 
 alter table task_distribution enable row level security;
+drop policy if exists "allow all" on task_distribution;
 create policy "allow all" on task_distribution for all using (true) with check (true);
 
 alter table absences enable row level security;
+drop policy if exists "allow all" on absences;
 create policy "allow all" on absences for all using (true) with check (true);
 
 alter table temporary_reallocations enable row level security;
+drop policy if exists "allow all" on temporary_reallocations;
 create policy "allow all" on temporary_reallocations for all using (true) with check (true);
 
 alter table makeup_hours enable row level security;
+drop policy if exists "allow all" on makeup_hours;
 create policy "allow all" on makeup_hours for all using (true) with check (true);
 
 alter table deskbird_sync_runs enable row level security;
+drop policy if exists "allow all" on deskbird_sync_runs;
 create policy "allow all" on deskbird_sync_runs for all using (true) with check (true);
 
 alter table deskbird_attendance_bookings enable row level security;
+drop policy if exists "allow all" on deskbird_attendance_bookings;
 create policy "allow all" on deskbird_attendance_bookings for all using (true) with check (true);
  

@@ -201,7 +201,7 @@ export default function DailyView() {
           <div className="font-semibold text-gray-900">{formatLabel(date)}</div>
           {data && !data.is_weekend && (
             <div className="text-xs text-gray-500 mt-0.5">
-              Week {data.week_number} · {data.total_hours}h total across team
+              Week {data.week_number} · {data.total_hours}h scheduled today across team
             </div>
           )}
         </div>

@@ -23,7 +23,7 @@ function merge(styles) {
 function exportCalendarExcel(data) {
   const { year, month, month_name, cur_first, section_a, section_b, groups, people, allocations, task_colors } = data
   const all_days = [...section_a, ...section_b]
-  const ncols = 2 + all_days.length
+  const ncols = 3 + all_days.length
 
   const WS = {}
   const merges = []
@@ -57,6 +57,7 @@ function exportCalendarExcel(data) {
     if (c1 < c2) merges.push({ s: { r: row, c: c1 }, e: { r: row, c: c2 } })
     for (let c = c1 + 1; c <= c2; c++) setCell(row, c, '', 's', sf(g.color))
   }
+  setCell(row, ncols - 1, 'Total', 's', DAY_H_STYLE)
   row++
 
   // Row 2: Day headers
@@ -72,6 +73,7 @@ function exportCalendarExcel(data) {
       alignment: { horizontal: 'center', vertical: 'center' },
     })
   }
+  setCell(row, ncols - 1, 'Total', 's', { fill: { fgColor: { rgb: '374151' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9 }, alignment: { horizontal: 'center', vertical: 'center' } })
   row++
 
   // Data rows
@@ -97,6 +99,7 @@ function exportCalendarExcel(data) {
       setCell(row, 0, '', 's', sf('EEF2FF'))
       setCell(row, 1, '—', 's', sf('F9FAFB'))
       for (let i = 0; i < all_days.length; i++) setCell(row, 2+i, '', 's', sf('F9FAFB'))
+      setCell(row, ncols - 1, '', 's', sf('F9FAFB'))
       row++
     } else {
       for (let ti = 0; ti < taskNames.length; ti++) {
@@ -113,6 +116,7 @@ function exportCalendarExcel(data) {
           alignment: { horizontal: 'left', vertical: 'center' },
         })
 
+        let taskDayTotal = 0
         for (let i = 0; i < all_days.length; i++) {
           const d = all_days[i]
           const td = day_alloc[d]
@@ -125,6 +129,7 @@ function exportCalendarExcel(data) {
               : sf('FEE2E2')
             setCell(row, 2+i, ti === 0 ? 'ABS' : '', 's', { ...cellStyle, alignment: { horizontal: 'center', vertical: 'center' } })
           } else if (td && typeof td === 'object' && td[tname] != null) {
+            taskDayTotal += td[tname]
             const bg = isCurrentMonth ? taskVlt : lighten(tc || 'A78BFA', 0.88)
             setCell(row, 2+i, td[tname], 'n', {
               fill: { fgColor: { rgb: bg } },
@@ -135,6 +140,11 @@ function exportCalendarExcel(data) {
             setCell(row, 2+i, '', 's', sf(isCurrentMonth ? 'F9FAFB' : 'F5F3FF'))
           }
         }
+        setCell(row, ncols - 1, taskDayTotal > 0 ? taskDayTotal : '', taskDayTotal > 0 ? 'n' : 's', {
+          fill: { fgColor: { rgb: taskVlt } },
+          font: { bold: true, color: { rgb: tcFont }, sz: 9 },
+          alignment: { horizontal: 'center', vertical: 'center' },
+        })
         row++
       }
     }
@@ -151,6 +161,7 @@ function exportCalendarExcel(data) {
   const totRow = row
   setCell(totRow, 0, 'Total', 's', { fill: { fgColor: { rgb: 'F0FDF4' } }, font: { bold: true, color: { rgb: '166534' } }, alignment: { horizontal: 'left', vertical: 'center' } })
   setCell(totRow, 1, '', 's', sf('F0FDF4'))
+  let grandDayTotal = 0
   for (let i = 0; i < all_days.length; i++) {
     const d = all_days[i]
     let total = 0
@@ -158,16 +169,22 @@ function exportCalendarExcel(data) {
       const td = (allocations[person.id] || {})[d]
       if (td && typeof td === 'object') total += Object.values(td).reduce((a,b) => a+b, 0)
     }
+    grandDayTotal += total
     setCell(totRow, 2+i, total > 0 ? total : '', total > 0 ? 'n' : 's', {
       fill: { fgColor: { rgb: 'F0FDF4' } },
       font: { bold: true, sz: 9, color: { rgb: '166534' } },
       alignment: { horizontal: 'center', vertical: 'center' },
     })
   }
+  setCell(totRow, ncols - 1, grandDayTotal > 0 ? grandDayTotal : '', grandDayTotal > 0 ? 'n' : 's', {
+    fill: { fgColor: { rgb: 'F0FDF4' } },
+    font: { bold: true, sz: 9, color: { rgb: '166534' } },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  })
 
   WS['!ref'] = XLSX.utils.encode_range({ s: { r:0, c:0 }, e: { r: totRow, c: ncols-1 } })
   WS['!merges'] = merges
-  WS['!cols'] = [{ wch: 14 }, { wch: 22 }, ...all_days.map(() => ({ wch: 7 }))]
+  WS['!cols'] = [{ wch: 14 }, { wch: 22 }, ...all_days.map(() => ({ wch: 7 })), { wch: 8 }]
   WS['!freeze'] = { xSplit: 2, ySplit: 3 }
 
   const wb = XLSX.utils.book_new()
@@ -380,9 +397,9 @@ export default function Calendar() {
           </span>
         )}
 
-        {/* W starts at */}
+        {/* First visible week cycle */}
         <div className="flex items-center gap-1.5">
-          <span className="text-xs text-gray-500 whitespace-nowrap">W starts at:</span>
+          <span className="text-xs text-gray-500 whitespace-nowrap">First week uses:</span>
           {[1, 2, 3, 4].map(w => (
             <button
               key={w}
@@ -397,6 +414,9 @@ export default function Calendar() {
             </button>
           ))}
         </div>
+        <span className="text-xs text-gray-400 whitespace-nowrap">
+          Later weeks continue in order.
+        </span>
 
         {/* Include prev overflow week as W1 */}
         <button

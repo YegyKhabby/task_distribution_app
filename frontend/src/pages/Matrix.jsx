@@ -1,5 +1,61 @@
 import { useState, useEffect } from 'react'
+import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+
+function exportMatrixExcel(people, tasks, distMap, weekNumber) {
+  const activeTasks = tasks.filter(t => people.some(p => (distMap[p.id] || {})[t.id] > 0))
+  const HDR = { fill: { fgColor: { rgb: '312E81' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+  const TOT = { fill: { fgColor: { rgb: 'F0FDF4' } }, font: { bold: true, color: { rgb: '166534' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+  const NUM = { alignment: { horizontal: 'center', vertical: 'center' }, font: { sz: 10 } }
+  const ws = {}
+  const ncols = 2 + activeTasks.length  // Person, tasks..., Total
+  const setCell = (r, c, v, t, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} } }
+
+  // Header row
+  setCell(0, 0, 'Person', 's', { ...HDR, alignment: { horizontal: 'left', vertical: 'center' } })
+  activeTasks.forEach((t, i) => setCell(0, 1 + i, t.name, 's', HDR))
+  setCell(0, ncols - 1, 'Total', 's', HDR)
+
+  // Person rows
+  const taskColTotals = new Array(activeTasks.length).fill(0)
+  let grandTotal = 0
+  for (let ri = 0; ri < people.length; ri++) {
+    const p = people[ri]
+    const pDist = distMap[p.id] || {}
+    const pTotal = Object.values(pDist).reduce((s, h) => s + h, 0)
+    const bg = ri % 2 === 0 ? 'FFFFFF' : 'F9FAFB'
+    setCell(ri + 1, 0, p.name, 's', { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } })
+    activeTasks.forEach((t, i) => {
+      const hrs = pDist[t.id] || 0
+      taskColTotals[i] += hrs
+      const colorHex = (t.color || '').replace('#', '')
+      const cellStyle = hrs > 0 && colorHex
+        ? { fill: { fgColor: { rgb: colorHex } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+        : { ...NUM, fill: { fgColor: { rgb: bg } } }
+      setCell(ri + 1, 1 + i, hrs > 0 ? hrs : '', hrs > 0 ? 'n' : 's', cellStyle)
+    })
+    setCell(ri + 1, ncols - 1, pTotal > 0 ? pTotal : '', pTotal > 0 ? 'n' : 's', { ...NUM, font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: bg } } })
+    grandTotal += pTotal
+  }
+
+  // Totals row
+  const totRow = people.length + 1
+  setCell(totRow, 0, 'Total', 's', { ...TOT, alignment: { horizontal: 'left', vertical: 'center' } })
+  activeTasks.forEach((t, i) => setCell(totRow, 1 + i, taskColTotals[i] > 0 ? taskColTotals[i] : '', taskColTotals[i] > 0 ? 'n' : 's', TOT))
+  setCell(totRow, ncols - 1, grandTotal, 'n', TOT)
+
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totRow, c: ncols - 1 } })
+  ws['!cols'] = [{ wch: 16 }, ...activeTasks.map(t => ({ wch: Math.max(10, Math.min(20, t.name.length)) })), { wch: 8 }]
+  ws['!freeze'] = { xSplit: 1, ySplit: 1 }
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, `Week ${weekNumber}`)
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a'); a.href = url; a.download = `matrix_week${weekNumber}.xlsx`; a.click()
+  URL.revokeObjectURL(url)
+}
 
 export default function Matrix() {
   const [weekNumber, setWeekNumber] = useState(1)
@@ -57,6 +113,12 @@ export default function Matrix() {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => exportMatrixExcel(people, tasks, distMap, weekNumber)}
+          className="text-sm text-gray-600 border border-gray-200 px-3 py-1 rounded-lg hover:bg-gray-50"
+        >
+          Download Excel
+        </button>
         <div className="flex gap-1">
           {[['cards', 'By Person'], ['task', 'By Task'], ['grid', 'Grid']].map(([v, label]) => (
             <button

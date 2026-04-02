@@ -40,7 +40,9 @@ export const api = {
   // Schedule
   getAllSchedules: () => cached('schedules', () => req('GET', '/schedule')),
   getSchedule: (personId) => req('GET', `/schedule/${personId}`),
+  // entries: [{day_of_week, hours, valid_from, valid_until?}]
   saveSchedule: (personId, entries) => req('PUT', `/schedule/${personId}`, entries).then(r => { invalidate('schedules'); return r }),
+  deleteScheduleVersion: (personId, validFrom) => req('DELETE', `/schedule/${personId}/version?valid_from=${validFrom}`).then(r => { invalidate('schedules'); return r }),
 
   // Tasks
   getTasks: () => cached('tasks', () => req('GET', '/tasks')),
@@ -64,7 +66,11 @@ export const api = {
 
   // Distribution (auto)
   previewDistribution: (weekNumber) => req('GET', `/distribute/preview?week_number=${weekNumber}`),
-  confirmDistribution: (data) => req('POST', '/distribute/confirm', data),
+  confirmDistribution: (weekNumber, effectiveFrom, overrides) => req('POST', '/distribute/confirm', {
+    week_number: weekNumber,
+    effective_from: effectiveFrom,  // ISO date string e.g. "2026-04-07"
+    overrides: overrides || null,
+  }),
 
   // Distribution (saved matrix — for Matrix page)
   getDistribution: (weekNumber) => req('GET', `/distribution${weekNumber != null ? `?week_number=${weekNumber}` : ''}`),
@@ -106,4 +112,9 @@ export const api = {
   getMakeup: (personId) => req('GET', `/makeup${personId ? `?person_id=${personId}` : ''}`),
   createMakeup: (data) => req('POST', '/makeup', data),
   deleteMakeup: (id) => req('DELETE', `/makeup/${id}`),
+
+  // Responsible persons
+  getResponsiblePersons: () => cached('responsiblePersons', () => req('GET', '/responsible-persons')),
+  createResponsiblePerson: (name) => req('POST', '/responsible-persons', { name }).then(r => { invalidate('responsiblePersons'); return r }),
+  deleteResponsiblePerson: (id) => req('DELETE', `/responsible-persons/${id}`).then(r => { invalidate('responsiblePersons'); return r }),
 }

@@ -48,11 +48,6 @@ export default function DeskbirdAttendance() {
         <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 shadow-sm min-w-[220px]">
           <div className="text-xs text-gray-500 uppercase tracking-wide">Missing bookings</div>
           <div className="text-2xl font-semibold text-gray-900 mt-1">{totalMissing}</div>
-          {data?.sync?.fetched_at && (
-            <div className="text-xs text-gray-500 mt-2">
-              Last sync: {new Date(data.sync.fetched_at).toLocaleString('en-GB')}
-            </div>
-          )}
         </div>
       </div>
 
@@ -71,9 +66,9 @@ export default function DeskbirdAttendance() {
         )}
       </div>
 
-      {data?.warnings?.incomplete_sync_range && (
-        <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-3 rounded-lg">
-          Deskbird sync does not fully cover the requested date range yet. Missing-booking results may be incomplete.
+      {data?.sync?.fetched_at && (
+        <div className="bg-gray-50 border border-gray-200 text-gray-500 text-sm px-4 py-3 rounded-lg">
+          Info updated at {new Date(data.sync.fetched_at).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
         </div>
       )}
 

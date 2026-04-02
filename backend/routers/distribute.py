@@ -2,6 +2,8 @@ from fastapi import APIRouter, HTTPException
 from database import supabase
 from models import DistributeRequest
 from collections import defaultdict
+from datetime import date, timedelta
+from utils.versioned import active_schedule_rows, next_monday
 
 router = APIRouter(prefix="/distribute", tags=["distribute"])
 
@@ -10,12 +12,21 @@ def round_half(val: float) -> float:
     return round(val * 2) / 2
 
 
-def fetch_all(week_number: int):
-    people = supabase.table("people").select("*, person_schedule(day_of_week, hours)").eq("active", True).execute().data
+def fetch_all(week_number: int, week_start_date: date):
+    week_start_str = str(week_start_date)
+    people_raw = supabase.table("people").select(
+        "*, person_schedule(day_of_week, hours, valid_from, valid_until)"
+    ).eq("active", True).execute().data
+    # Filter each person's schedule to the version active for week_start_date
+    for p in people_raw:
+        rows = p.get("person_schedule") or []
+        for r in rows:
+            r["person_id"] = p["id"]
+        p["person_schedule"] = active_schedule_rows(rows, week_start_str)
     tasks = supabase.table("tasks").select("*").execute().data
     assignments = supabase.table("task_people").select("task_id, person_id").eq("week_number", week_number).execute().data
     fixed = supabase.table("task_fixed_hours").select("task_id, person_id, hours").execute().data
-    return people, tasks, assignments, fixed
+    return people_raw, tasks, assignments, fixed
 
 
 def compute_weekly_hours(person):
@@ -112,8 +123,10 @@ def iterative_solve(task_needs, task_auto_pids, person_caps):
     return result, remaining_cap, remaining_need
 
 
-def compute_preview(week_number: int):
-    people, tasks, assignments, fixed_rows = fetch_all(week_number)
+def compute_preview(week_number: int, week_start_date: date = None):
+    if week_start_date is None:
+        week_start_date = next_monday(date.today())
+    people, tasks, assignments, fixed_rows = fetch_all(week_number, week_start_date)
 
     # Map week_number to legacy week_scope filter value
     week_scope_filter = "W1" if week_number == 1 else "W234"
@@ -157,11 +170,33 @@ def compute_preview(week_number: int):
         fixed_allocated[pid] += hrs
         task_fixed_totals[tid] += hrs
 
-    # --- Step 2: build inputs for iterative solver ---
+    # --- Step 2: handle split_equally tasks (equal share per person, bypass solver) ---
+    equal_split_result = {}   # (pid, tid) -> hours
+    equal_split_allocated = defaultdict(float)  # pid -> hours consumed
+
+    equal_tasks  = [t for t in normal_tasks if t.get("split_equally")]
+    solver_tasks = [t for t in normal_tasks if not t.get("split_equally")]
+
+    for task in equal_tasks:
+        tid = task["id"]
+        target = task["weekly_hours_target"]
+        assigned = task_assigned.get(tid, set())
+        auto_pids = [p for p in assigned if (tid, p) not in fixed_map]
+        remaining = round_half(max(0, target - task_fixed_totals[tid]))
+        if not auto_pids or remaining <= 0:
+            continue
+        share = round_half(remaining / len(auto_pids))
+        for i, pid in enumerate(auto_pids):
+            # Last person absorbs rounding remainder
+            hrs = round_half(remaining - share * (len(auto_pids) - 1)) if i == len(auto_pids) - 1 else share
+            equal_split_result[(pid, tid)] = hrs
+            equal_split_allocated[pid] += hrs
+
+    # --- Step 3: build inputs for iterative solver (non-equal tasks only) ---
     task_needs = {}
     task_auto_pids = {}
 
-    for task in normal_tasks:
+    for task in solver_tasks:
         tid = task["id"]
         target = task["weekly_hours_target"]
         assigned = task_assigned.get(tid, set())
@@ -170,19 +205,21 @@ def compute_preview(week_number: int):
         task_needs[tid] = remaining
         task_auto_pids[tid] = auto_pids
 
-    # Available capacity for auto distribution = total - fixed
+    # Available capacity = total - fixed - equal_split
     person_auto_caps = {
-        pid: round_half(max(0, capacity[pid] - fixed_allocated[pid]))
+        pid: round_half(max(0, capacity[pid] - fixed_allocated[pid] - equal_split_allocated[pid]))
         for pid in capacity
     }
 
-    # --- Step 3: solve iteratively ---
+    # --- Step 4: solve iteratively ---
     auto_result, remaining_cap, shortfalls = iterative_solve(task_needs, task_auto_pids, person_auto_caps)
 
-    # --- Step 4: build result list ---
-    # person_id -> total allocated (fixed + auto)
+    # --- Step 5: build result list ---
+    # person_id -> total allocated (fixed + equal_split + auto)
     total_allocated = defaultdict(float)
     for pid, hrs in fixed_allocated.items():
+        total_allocated[pid] += hrs
+    for pid, hrs in equal_split_allocated.items():
         total_allocated[pid] += hrs
     for (pid, tid), hrs in auto_result.items():
         total_allocated[pid] += hrs
@@ -200,6 +237,11 @@ def compute_preview(week_number: int):
                 hrs = fixed_map[(tid, pid)]
                 p = person_map[pid]
                 distributions.append({"person_id": pid, "person_name": p["name"], "hours": hrs, "type": "fixed"})
+            elif task.get("split_equally"):
+                hrs = equal_split_result.get((pid, tid), 0)
+                if hrs > 0:
+                    p = person_map[pid]
+                    distributions.append({"person_id": pid, "person_name": p["name"], "hours": hrs, "type": "equal"})
             else:
                 hrs = auto_result.get((pid, tid), 0)
                 if hrs > 0:
@@ -221,12 +263,14 @@ def compute_preview(week_number: int):
             "task_color": task.get("color"),
             "target_hours": target,
             "is_fill": False,
+            "schedule_rule": task.get("schedule_rule"),
+            "split_equally": task.get("split_equally", False),
             "distributions": distributions,
             "total_distributed": total_dist,
             "warning": task_warning,
         })
 
-    # --- Step 5: fill tasks absorb leftover per person ---
+    # --- Step 6: fill tasks absorb leftover per person ---
     # Recompute remaining cap after auto distribution
     final_remaining = {
         pid: round_half(max(0, capacity[pid] - total_allocated[pid]))
@@ -281,51 +325,63 @@ def compute_preview(week_number: int):
 
 @router.get("/preview")
 def preview_distribution(week_number: int = 1):
-    return compute_preview(week_number)
+    return compute_preview(week_number, next_monday(date.today()))
 
 
 @router.post("/confirm")
 def confirm_distribution(body: DistributeRequest):
-    preview = compute_preview(body.week_number)
+    # Snap effective_from to Monday (default = next Monday from today)
+    raw_date = body.effective_from or date.today()
+    effective_from = next_monday(raw_date) if raw_date.weekday() != 0 else raw_date
+    effective_from_str = str(effective_from)
 
     override_map = {}
     if body.overrides:
         for o in body.overrides:
             override_map[(o["person_id"], o["task_id"])] = o["hours"]
 
-    # Read preferred_days from task_people (source of truth)
-    assignments_res = supabase.table("task_people").select(
-        "person_id, task_id, preferred_days"
-    ).eq("week_number", body.week_number).execute()
-    preferred_map = {
-        (r["person_id"], r["task_id"]): r["preferred_days"]
-        for r in assignments_res.data
-        if r.get("preferred_days")
-    }
+    total_saved = 0
 
-    rows = []
-    for task in preview["tasks"]:
-        tid = task["task_id"]
-        for d in task["distributions"]:
-            pid = d["person_id"]
-            hrs = override_map.get((pid, tid), d["hours"])
-            if hrs > 0:
-                row = {
-                    "person_id": pid,
-                    "task_id": tid,
-                    "week_number": body.week_number,
-                    "hours_per_week": hrs,
-                }
-                pd = preferred_map.get((pid, tid))
-                if pd:
-                    row["preferred_days"] = pd
-                rows.append(row)
+    for wn in [1, 2, 3, 4]:
+        preview = compute_preview(wn, effective_from)
 
-    if not rows:
+        # Read preferred_days from task_people for this week_number
+        assignments_res = supabase.table("task_people").select(
+            "person_id, task_id, preferred_days"
+        ).eq("week_number", wn).execute()
+        preferred_map = {
+            (r["person_id"], r["task_id"]): r["preferred_days"]
+            for r in assignments_res.data
+            if r.get("preferred_days")
+        }
+
+        rows = []
+        for task in preview["tasks"]:
+            tid = task["task_id"]
+            for d in task["distributions"]:
+                pid = d["person_id"]
+                hrs = override_map.get((pid, tid), d["hours"])
+                if hrs > 0:
+                    row = {
+                        "person_id": pid,
+                        "task_id": tid,
+                        "week_number": wn,
+                        "hours_per_week": hrs,
+                        "valid_from": effective_from_str,
+                    }
+                    pd = preferred_map.get((pid, tid))
+                    if pd:
+                        row["preferred_days"] = pd
+                    rows.append(row)
+
+        if rows:
+            # Upsert — conflict on (person_id, task_id, week_number, valid_from)
+            supabase.table("task_distribution").upsert(
+                rows, on_conflict="person_id,task_id,week_number,valid_from"
+            ).execute()
+            total_saved += len(rows)
+
+    if total_saved == 0:
         raise HTTPException(400, "Nothing to save — assign people to tasks first")
 
-    # Delete all existing rows for this week first so removed assignments don't linger
-    supabase.table("task_distribution").delete().eq("week_number", body.week_number).execute()
-    supabase.table("task_distribution").insert(rows).execute()
-
-    return {"saved": len(rows), "week_number": body.week_number}
+    return {"saved": total_saved, "effective_from": effective_from_str}

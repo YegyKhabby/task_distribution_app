@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from routers import people, tasks, schedule, assignments, distribute, distribution, absences, impact, reallocations, makeup, calendar, attendance
+from routers import people, tasks, schedule, assignments, distribute, distribution, absences, impact, reallocations, makeup, calendar, attendance, responsible_persons
 
 app = FastAPI(title="Task Distribution API", version="1.0.0")
 
@@ -28,6 +28,7 @@ app.include_router(reallocations.router, prefix="/api")
 app.include_router(makeup.router, prefix="/api")
 app.include_router(calendar.router, prefix="/api")
 app.include_router(attendance.router, prefix="/api")
+app.include_router(responsible_persons.router, prefix="/api")
 
 
 @app.get("/health")
