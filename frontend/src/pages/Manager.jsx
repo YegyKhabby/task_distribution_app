@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 function exportTasksExcel(tasks, people, distribution, weekNumber) {
   const distMap = {}
@@ -149,6 +150,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', week_scope: 'both', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
   const [formError, setFormError] = useState('')
+  const [pendingTaskDelete, setPendingTaskDelete] = useState(null)
   const [responsiblePersons, setResponsiblePersons] = useState([])
   const [showRpEditor, setShowRpEditor] = useState(false)
   const [newRpName, setNewRpName] = useState('')
@@ -286,8 +288,8 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
   }
 
   const remove = async (id) => {
-    if (!confirm('Delete this task? All assignments will be removed.')) return
     await api.deleteTask(id)
+    setPendingTaskDelete(null)
     onReload()
   }
 
@@ -446,7 +448,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
                   <span className="text-xs text-gray-400 shrink-0">{assigned.size} assigned</span>
                 </button>
                 <button
-                  onClick={() => remove(t.id)}
+                  onClick={() => setPendingTaskDelete(t)}
                   className="text-xs px-2 py-1 rounded border border-red-200 text-red-500 hover:bg-red-50 shrink-0"
                 >
                   Remove
@@ -595,6 +597,16 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
           <p className="text-center text-gray-400 py-12">No tasks yet. Click + Add Task to get started.</p>
         )}
       </div>
+
+      <ConfirmDialog
+        open={Boolean(pendingTaskDelete)}
+        title="Delete task?"
+        message={pendingTaskDelete ? `${pendingTaskDelete.name} will be deleted and all of its assignments will be removed.` : ''}
+        confirmLabel="Delete"
+        tone="danger"
+        onConfirm={() => pendingTaskDelete && remove(pendingTaskDelete.id)}
+        onCancel={() => setPendingTaskDelete(null)}
+      />
     </div>
   )
 }

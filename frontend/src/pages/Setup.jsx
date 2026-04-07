@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { format, addDays, parseISO, subDays } from 'date-fns'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 const SCHED_DAY_LABELS = { 1: 'Monday', 2: 'Tuesday', 3: 'Wednesday', 4: 'Thursday', 5: 'Friday' }
 
@@ -171,6 +172,7 @@ export default function Setup() {
   const [savedFuture, setSavedFuture] = useState(false)
   const [errorFuture, setErrorFuture] = useState('')
   const [futureDateHint, setFutureDateHint] = useState('')
+  const [showRemoveFutureConfirm, setShowRemoveFutureConfirm] = useState(false)
 
   // Add new person
   const [newName, setNewName] = useState('')
@@ -282,13 +284,11 @@ export default function Setup() {
 
   const removeFuture = async () => {
     if (!futureVersion) return
-    if (!confirm(`Remove the upcoming schedule starting on ${formatLabelDate(futureVersion.validFrom)}?`)) {
-      return
-    }
     try {
       await api.deleteScheduleVersion(selectedId, futureVersion.validFrom)
       setFutureVersion(null)
       setFutureForm(null)
+      setShowRemoveFutureConfirm(false)
     } catch (e) {
       alert('Could not remove future schedule: ' + e.message)
     }
@@ -301,21 +301,11 @@ export default function Setup() {
 
   return (
     <div className="max-w-3xl mx-auto">
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">My Schedule</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Manage your current weekly pattern and one upcoming Monday-based schedule change.
-          </p>
-        </div>
-        {selectedId && selectedPerson && (
-          <button
-            onClick={() => exportScheduleExcel(selectedPerson.name, schedule, futureVersion)}
-            className="shrink-0 text-sm text-gray-600 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
-          >
-            Download Excel
-          </button>
-        )}
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900">My Schedule</h1>
+        <p className="mt-1 text-sm text-gray-500">
+          Manage your current weekly pattern and one upcoming Monday-based schedule change.
+        </p>
       </div>
 
       {/* Person picker */}
@@ -460,7 +450,7 @@ export default function Setup() {
                 </div>
                 <div className="flex gap-2 shrink-0">
                   <button onClick={openFutureForm} className="text-xs text-amber-700 border border-amber-200 rounded px-2 py-1 hover:bg-amber-100">Edit</button>
-                  <button onClick={removeFuture} className="text-xs text-red-500 border border-red-200 rounded px-2 py-1 hover:bg-red-50">Remove</button>
+                  <button onClick={() => setShowRemoveFutureConfirm(true)} className="text-xs text-red-500 border border-red-200 rounded px-2 py-1 hover:bg-red-50">Remove</button>
                 </div>
               </div>
             </div>
@@ -524,6 +514,16 @@ export default function Setup() {
           )}
         </div>
       )}
+
+      <ConfirmDialog
+        open={showRemoveFutureConfirm}
+        title="Remove upcoming schedule?"
+        message={futureVersion ? `This will delete the schedule starting on ${formatLabelDate(futureVersion.validFrom)}.` : ''}
+        confirmLabel="Remove"
+        tone="danger"
+        onConfirm={removeFuture}
+        onCancel={() => setShowRemoveFutureConfirm(false)}
+      />
     </div>
   )
 }

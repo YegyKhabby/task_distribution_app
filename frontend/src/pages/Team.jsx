@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 const SCHED_DAYS = [
   { num: 1, label: 'Mon' },
@@ -65,8 +66,57 @@ function exportTeamExcel(people, allSchedules) {
   ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totRow, c: 6 } })
   ws['!cols'] = [{ wch: 16 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }]
 
+  // Sheet 2: Upcoming schedule changes
+  const futureRows = allSchedules.filter(r => r.valid_from > today)
+  const ws2 = {}
+  const setCell2 = (r, c, v, t, s) => { ws2[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} } }
+  setCell2(0, 0, 'Person', 's', { ...HDR, alignment: { horizontal: 'left', vertical: 'center' } })
+  setCell2(0, 1, 'Valid from', 's', HDR)
+  SCHED_DAYS.forEach((d, i) => setCell2(0, 2 + i, d.label, 's', HDR))
+  setCell2(0, 7, 'Total', 's', HDR)
+
+  // Group future rows by person + valid_from
+  const futureByPersonDate = {}
+  for (const r of futureRows) {
+    const key = `${r.person_id}__${r.valid_from}`
+    if (!futureByPersonDate[key]) futureByPersonDate[key] = { person_id: r.person_id, valid_from: r.valid_from, days: {} }
+    futureByPersonDate[key].days[r.day_of_week] = r
+  }
+  const futureEntries = Object.values(futureByPersonDate).sort((a, b) => a.valid_from.localeCompare(b.valid_from))
+
+  if (futureEntries.length === 0) {
+    setCell2(1, 0, 'No upcoming schedule changes', 's', { font: { italic: true, color: { rgb: '9CA3AF' }, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } })
+    ws2['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 1, c: 7 } })
+  } else {
+    for (let ri = 0; ri < futureEntries.length; ri++) {
+      const entry = futureEntries[ri]
+      const person = people.find(p => p.id === entry.person_id)
+      const bg = ri % 2 === 0 ? 'FFFFFF' : 'F9FAFB'
+      const weeklyTotal = SCHED_DAYS.reduce((s, d) => s + (entry.days[d.num]?.hours || 0), 0)
+      setCell2(ri + 1, 0, person?.name ?? entry.person_id, 's', { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } })
+      setCell2(ri + 1, 1, entry.valid_from, 's', { fill: { fgColor: { rgb: 'FFFBEB' } }, font: { color: { rgb: 'B45309' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } })
+      SCHED_DAYS.forEach((d, i) => {
+        const row = entry.days[d.num]
+        if (row && row.hours > 0) {
+          const isHome = row.location === 'home'
+          setCell2(ri + 1, 2 + i, row.hours, 'n', {
+            fill: { fgColor: { rgb: isHome ? 'CCFBF1' : 'E0E7FF' } },
+            font: { color: { rgb: isHome ? '0F766E' : '312E81' }, sz: 10 },
+            alignment: { horizontal: 'center', vertical: 'center' },
+          })
+        } else {
+          setCell2(ri + 1, 2 + i, '', 's', { fill: { fgColor: { rgb: bg } } })
+        }
+      })
+      setCell2(ri + 1, 7, weeklyTotal > 0 ? weeklyTotal : '', weeklyTotal > 0 ? 'n' : 's', { ...TOT, fill: { fgColor: { rgb: bg } } })
+    }
+    ws2['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: futureEntries.length, c: 7 } })
+  }
+  ws2['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }]
+
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'Schedules')
+  XLSX.utils.book_append_sheet(wb, ws, 'Current Schedules')
+  XLSX.utils.book_append_sheet(wb, ws2, 'Upcoming Changes')
   const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
   const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   const url = URL.createObjectURL(blob)
@@ -177,6 +227,7 @@ export default function Team() {
   const [editing, setEditing] = useState(null)
   const [name, setName] = useState('')
   const [error, setError] = useState('')
+  const [pendingRemove, setPendingRemove] = useState(null)
 
   const load = async () => {
     setLoading(true)
@@ -200,8 +251,8 @@ export default function Team() {
   }
 
   const remove = async (id) => {
-    if (!confirm('Remove this person? Their schedule and assignments will also be deleted.')) return
     await api.deletePerson(id)
+    setPendingRemove(null)
     load()
   }
 
@@ -257,7 +308,7 @@ export default function Team() {
                         {p.active ? 'Deactivate' : 'Activate'}
                       </button>
                       <button onClick={() => startEdit(p)} className="text-xs px-2 py-1 rounded border border-indigo-200 text-indigo-600 hover:bg-indigo-50">Edit</button>
-                      <button onClick={() => remove(p.id)} className="text-xs px-2 py-1 rounded border border-red-200 text-red-500 hover:bg-red-50">Remove</button>
+                      <button onClick={() => setPendingRemove(p)} className="text-xs px-2 py-1 rounded border border-red-200 text-red-500 hover:bg-red-50">Remove</button>
                     </>
                   )}
                 </div>
@@ -269,6 +320,16 @@ export default function Team() {
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={Boolean(pendingRemove)}
+        title="Remove team member?"
+        message={pendingRemove ? `${pendingRemove.name} will be removed together with their schedule and assignments.` : ''}
+        confirmLabel="Remove"
+        tone="danger"
+        onConfirm={() => pendingRemove && remove(pendingRemove.id)}
+        onCancel={() => setPendingRemove(null)}
+      />
     </div>
   )
 }
