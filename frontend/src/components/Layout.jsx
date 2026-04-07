@@ -8,6 +8,7 @@ const NAV = [
   { to: '/absences', label: 'Absences' },
   { to: '/impact',    label: 'Impact' },
   { to: '/calendar',  label: 'Calendar' },
+  { to: '/actual',    label: 'Actual' },
   { to: '/daily',     label: 'Daily View' },
   { to: '/deskbird-attendance', label: 'Deskbird/Attendance' },
 ]

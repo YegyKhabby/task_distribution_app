@@ -100,3 +100,22 @@ class MakeupCreate(BaseModel):
     task_id: str
     hours: float
     note: Optional[str] = None
+
+
+class ActualHoursCreate(BaseModel):
+    person_id: str
+    task_id: Optional[str] = None
+    task_label: str
+    date: date
+    hours: float
+
+
+class ActualHoursUpdate(BaseModel):
+    hours: Optional[float] = None
+    task_label: Optional[str] = None
+    date: Optional[date] = None
+
+
+class CopyWeekRequest(BaseModel):
+    week_start: date
+    force: bool = False

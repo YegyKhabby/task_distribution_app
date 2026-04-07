@@ -9,6 +9,7 @@ import Team from './pages/Team'
 import Calendar from './pages/Calendar'
 import DailyView from './pages/DailyView'
 import DeskbirdAttendance from './pages/DeskbirdAttendance'
+import Actual from './pages/Actual'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/daily" element={<DailyView />} />
         <Route path="/deskbird-attendance" element={<DeskbirdAttendance />} />
+        <Route path="/actual" element={<Actual />} />
       </Routes>
     </Layout>
   )

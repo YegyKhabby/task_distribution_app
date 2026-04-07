@@ -117,4 +117,11 @@ export const api = {
   getResponsiblePersons: () => cached('responsiblePersons', () => req('GET', '/responsible-persons')),
   createResponsiblePerson: (name) => req('POST', '/responsible-persons', { name }).then(r => { invalidate('responsiblePersons'); return r }),
   deleteResponsiblePerson: (id) => req('DELETE', `/responsible-persons/${id}`).then(r => { invalidate('responsiblePersons'); return r }),
+
+  // Actual hours
+  getActual: (weekStart) => req('GET', `/actual?week_start=${weekStart}`),
+  createActual: (data) => req('POST', '/actual', data),
+  updateActual: (id, data) => req('PUT', `/actual/${id}`, data),
+  deleteActual: (id) => req('DELETE', `/actual/${id}`),
+  copyActualWeek: (weekStart, force = false) => req('POST', '/actual/copy-week', { week_start: weekStart, force }),
 }
