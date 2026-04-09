@@ -16,9 +16,9 @@ def get_distribution(week_number: Optional[int] = None, week_start: Optional[dat
     if week_number is not None:
         q = q.eq("week_number", week_number)
     rows = q.execute().data
-    # If week_start provided, return only the active version per (person, task)
-    if week_start is not None:
-        rows = active_distribution_rows(rows, str(week_start))
+    # Always filter to the active version per (person, task) — default to today
+    effective_date = week_start or date.today()
+    rows = active_distribution_rows(rows, str(effective_date))
     return rows
 
 

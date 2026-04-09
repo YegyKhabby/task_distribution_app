@@ -26,7 +26,7 @@ def assign_person(body: TaskPersonAssign):
 @router.delete("")
 def unassign_person(task_id: str, person_id: str, week_number: int):
     supabase.table("task_people").delete().eq("task_id", task_id).eq("person_id", person_id).eq("week_number", week_number).execute()
-    # Also remove the distribution row for this week
+    # Remove ALL version rows for this person/task/week (across all valid_from dates)
     supabase.table("task_distribution").delete().eq("task_id", task_id).eq("person_id", person_id).eq("week_number", week_number).execute()
 
 
