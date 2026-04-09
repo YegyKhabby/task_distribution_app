@@ -332,7 +332,9 @@ def preview_distribution(week_number: int = 1):
 def confirm_distribution(body: DistributeRequest):
     # Snap effective_from to Monday (default = next Monday from today)
     raw_date = body.effective_from or date.today()
-    effective_from = next_monday(raw_date) if raw_date.weekday() != 0 else raw_date
+    # Always snap to the NEXT upcoming Monday — never today even if today is Monday
+    days_ahead = (7 - raw_date.weekday()) % 7 or 7
+    effective_from = raw_date + timedelta(days=days_ahead)
     effective_from_str = str(effective_from)
 
     override_map = {}

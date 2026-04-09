@@ -709,7 +709,7 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePe
 function nextMonday() {
   const d = new Date()
   const day = d.getDay() // 0=Sun,1=Mon,...
-  const daysUntilMonday = day === 1 ? 0 : (8 - day) % 7 || 7
+  const daysUntilMonday = (8 - day) % 7 || 7
   d.setDate(d.getDate() + daysUntilMonday)
   return d.toISOString().slice(0, 10)
 }
