@@ -123,5 +123,8 @@ export const api = {
   createActual: (data) => req('POST', '/actual', data),
   updateActual: (id, data) => req('PUT', `/actual/${id}`, data),
   deleteActual: (id) => req('DELETE', `/actual/${id}`),
-  copyActualWeek: (weekStart, force = false) => req('POST', '/actual/copy-week', { week_start: weekStart, force }),
+  copyActualWeek: (weekStart, force = false, weekStartOffset = 1) => req('POST', '/actual/copy-week', { week_start: weekStart, force, week_start_offset: weekStartOffset }),
+  getActualLocation: (weekStart) => req('GET', `/actual/location?week_start=${weekStart}`),
+  upsertActualLocation: (personId, date, location) => req('PUT', '/actual/location', { person_id: personId, date, location }),
+  getActualExportUrl: (dates) => `${BASE}/actual/export?dates=${dates.join(',')}`,
 }

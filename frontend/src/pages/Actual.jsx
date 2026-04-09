@@ -62,9 +62,22 @@ function buildGrid(entries) {
   return grid
 }
 
+/** Lighten a hex color toward white. factor=0 → original, factor=1 → white */
+function lightenHex(hex, factor = 0.88) {
+  const h = (hex || '6366F1').replace('#', '')
+  if (h.length !== 6) return null
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  const r2 = Math.round(r + (255 - r) * factor)
+  const g2 = Math.round(g + (255 - g) * factor)
+  const b2 = Math.round(b + (255 - b) * factor)
+  return `rgb(${r2},${g2},${b2})`
+}
+
 // ── Cell: inline-editable hours ───────────────────────────────────────────────
 
-function EditableCell({ entryId, hours, personId, taskId, taskLabel, dateStr, onSave }) {
+function EditableCell({ entryId, hours, personId, taskId, taskLabel, dateStr, taskColor, onSave }) {
   const [editing, setEditing] = useState(false)
   const [val, setVal] = useState('')
 
@@ -96,6 +109,8 @@ function EditableCell({ entryId, hours, personId, taskId, taskLabel, dateStr, on
     onSave()
   }
 
+  const lightBg = hours > 0 && taskColor ? lightenHex(taskColor, 0.88) : null
+
   if (editing) {
     return (
       <input
@@ -115,7 +130,10 @@ function EditableCell({ entryId, hours, personId, taskId, taskLabel, dateStr, on
   return (
     <button
       onClick={startEdit}
-      className={`w-full text-center text-xs px-1 py-1 rounded hover:bg-indigo-50 transition-colors ${hours > 0 ? 'font-semibold text-gray-800' : 'text-gray-300'}`}
+      style={lightBg ? { backgroundColor: lightBg } : {}}
+      className={`w-full text-center text-xs px-1 py-1.5 rounded hover:opacity-80 transition-opacity ${
+        hours > 0 ? 'font-semibold text-gray-800' : 'text-gray-300 hover:bg-indigo-50'
+      }`}
     >
       {hours > 0 ? hours : '—'}
     </button>
@@ -124,7 +142,7 @@ function EditableCell({ entryId, hours, personId, taskId, taskLabel, dateStr, on
 
 // ── Add-task form (per person) ────────────────────────────────────────────────
 
-function AddTaskForm({ personId, weekStart, weekDates, tasks, onDone, onCancel }) {
+function AddTaskForm({ personId, weekDates, tasks, onDone, onCancel }) {
   const [taskId, setTaskId] = useState('')
   const [label, setLabel] = useState('')
   const [dayIdx, setDayIdx] = useState(0)
@@ -152,11 +170,11 @@ function AddTaskForm({ personId, weekStart, weekDates, tasks, onDone, onCancel }
   }
 
   return (
-    <form onSubmit={submit} className="flex flex-wrap items-center gap-2 mt-1 ml-4 text-xs">
+    <form onSubmit={submit} className="flex flex-wrap items-center gap-2 py-1.5 px-2 text-xs bg-indigo-50 rounded-lg">
       <select
         value={taskId}
         onChange={(e) => setTaskId(e.target.value)}
-        className="border border-gray-200 rounded px-2 py-1 text-xs"
+        className="border border-gray-200 rounded px-2 py-1 text-xs bg-white"
         required
       >
         <option value="">— pick task —</option>
@@ -171,14 +189,14 @@ function AddTaskForm({ personId, weekStart, weekDates, tasks, onDone, onCancel }
           placeholder="label"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          className="border border-gray-200 rounded px-2 py-1 text-xs w-28"
+          className="border border-gray-200 rounded px-2 py-1 text-xs w-28 bg-white"
           required
         />
       )}
       <select
         value={dayIdx}
         onChange={(e) => setDayIdx(Number(e.target.value))}
-        className="border border-gray-200 rounded px-2 py-1 text-xs"
+        className="border border-gray-200 rounded px-2 py-1 text-xs bg-white"
       >
         {weekDates.map((d, i) => (
           <option key={d} value={i}>{DAY_LABELS[i]} {d.slice(5)}</option>
@@ -191,10 +209,10 @@ function AddTaskForm({ personId, weekStart, weekDates, tasks, onDone, onCancel }
         placeholder="hrs"
         value={hours}
         onChange={(e) => setHours(e.target.value)}
-        className="border border-gray-200 rounded px-2 py-1 text-xs w-16"
+        className="border border-gray-200 rounded px-2 py-1 text-xs w-16 bg-white"
         required
       />
-      <button type="submit" disabled={saving} className="bg-indigo-600 text-white px-2 py-1 rounded text-xs hover:bg-indigo-700 disabled:opacity-50">
+      <button type="submit" disabled={saving} className="bg-indigo-600 text-white px-3 py-1 rounded text-xs hover:bg-indigo-700 disabled:opacity-50">
         Add
       </button>
       <button type="button" onClick={onCancel} className="text-gray-400 hover:text-gray-600 px-1 py-1 text-xs">
@@ -213,10 +231,15 @@ export default function Actual() {
   const [people, setPeople] = useState([])
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
-  const [addingFor, setAddingFor] = useState(null) // person_id
-  const [copyState, setCopyState] = useState('idle') // 'idle' | 'confirm' | 'copying'
+  const [addingFor, setAddingFor] = useState(null)
+  const [copyState, setCopyState] = useState('idle')
+  const [exportDays, setExportDays] = useState([0, 1, 2, 3, 4])
+  const [locations, setLocations] = useState({}) // { person_id: { date: 'office'|'home' } }
 
   const weekDates = [0, 1, 2, 3, 4].map((i) => addDaysToDate(selectedWeek, i))
+
+  // task color lookup by id
+  const taskColorMap = Object.fromEntries(tasks.map((t) => [t.id, t.color]))
 
   useEffect(() => {
     Promise.all([api.getPeople(), api.getTasks()]).then(([p, t]) => {
@@ -227,8 +250,12 @@ export default function Actual() {
 
   const reload = useCallback(() => {
     setLoading(true)
-    api.getActual(selectedWeek).then((d) => {
+    Promise.all([
+      api.getActual(selectedWeek),
+      api.getActualLocation(selectedWeek),
+    ]).then(([d, loc]) => {
       setEntries(d)
+      setLocations(loc)
       setLoading(false)
     })
   }, [selectedWeek])
@@ -242,22 +269,51 @@ export default function Actual() {
   const grid = buildGrid(entries)
   const hasData = entries.length > 0
 
+  function getWeekStartOffset() {
+    const d = new Date(selectedWeek + 'T00:00:00')
+    const year = d.getFullYear()
+    const month = d.getMonth() + 1
+    return parseInt(localStorage.getItem(`week_start_${year}_${month}`) || '1', 10)
+  }
+
   async function handleCopy() {
     if (hasData && copyState === 'idle') {
       setCopyState('confirm')
       return
     }
     setCopyState('copying')
-    await api.copyActualWeek(selectedWeek, false)
+    await api.copyActualWeek(selectedWeek, false, getWeekStartOffset())
     reload()
     setCopyState('idle')
   }
 
   async function handleCopyForce() {
     setCopyState('copying')
-    await api.copyActualWeek(selectedWeek, true)
+    await api.copyActualWeek(selectedWeek, true, getWeekStartOffset())
     reload()
     setCopyState('idle')
+  }
+
+  async function handleToggleLocation(personId, dateStr) {
+    const current = locations[personId]?.[dateStr] || 'office'
+    const next = current === 'office' ? 'home' : 'office'
+    setLocations((prev) => ({
+      ...prev,
+      [personId]: { ...prev[personId], [dateStr]: next },
+    }))
+    await api.upsertActualLocation(personId, dateStr, next)
+  }
+
+  function handleExport() {
+    const dates = exportDays.map((i) => weekDates[i])
+    if (!dates.length) return
+    window.open(api.getActualExportUrl(dates), '_blank')
+  }
+
+  function toggleExportDay(i) {
+    setExportDays((prev) =>
+      prev.includes(i) ? prev.filter((d) => d !== i) : [...prev, i].sort()
+    )
   }
 
   // Team totals per day
@@ -267,62 +323,90 @@ export default function Actual() {
   const teamGrandTotal = teamTotals.reduce((s, h) => s + h, 0)
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-5 flex-wrap">
-        <h1 className="text-2xl font-bold text-gray-900">Actual</h1>
-        <select
-          value={selectedWeek}
-          onChange={(e) => setSelectedWeek(e.target.value)}
-          className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm ml-2"
-        >
-          {WEEKS.map((w) => (
-            <option key={w.value} value={w.value}>{w.label}</option>
-          ))}
-        </select>
+    <div className="max-w-6xl">
+      {/* Header card */}
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm px-5 py-4 mb-5">
+        <div className="flex items-center gap-3 flex-wrap">
+          <h1 className="text-xl font-bold text-gray-900">Actual Hours</h1>
 
-        {/* Copy from planned */}
-        {copyState === 'idle' && (
-          <button
-            onClick={handleCopy}
-            className="text-sm border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
+          <select
+            value={selectedWeek}
+            onChange={(e) => setSelectedWeek(e.target.value)}
+            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm ml-1"
           >
-            Copy from planned
-          </button>
-        )}
-        {copyState === 'confirm' && (
-          <span className="flex items-center gap-2 text-sm">
-            <span className="text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-              Entries from the plan will be added. Existing entries won't be overwritten.
-            </span>
-            <button onClick={handleCopyForce} className="bg-amber-600 text-white px-3 py-1 rounded text-sm hover:bg-amber-700">
-              Proceed
+            {WEEKS.map((w) => (
+              <option key={w.value} value={w.value}>{w.label}</option>
+            ))}
+          </select>
+
+          <div className="ml-auto flex items-center gap-2 flex-wrap">
+            {/* Copy from planned */}
+            {copyState === 'idle' && (
+              <button
+                onClick={handleCopy}
+                className="text-sm border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50 text-gray-700"
+              >
+                Copy from planned
+              </button>
+            )}
+            {copyState === 'confirm' && (
+              <span className="flex items-center gap-2 text-sm">
+                <span className="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5 text-xs">
+                  This will delete existing entries and re-copy from the calendar.
+                </span>
+                <button onClick={handleCopyForce} className="bg-amber-600 text-white px-3 py-1.5 rounded-lg text-sm hover:bg-amber-700">
+                  Proceed
+                </button>
+                <button onClick={() => setCopyState('idle')} className="text-gray-500 hover:text-gray-700 px-2 py-1 text-sm">
+                  Cancel
+                </button>
+              </span>
+            )}
+            {copyState === 'copying' && (
+              <span className="text-sm text-gray-400">Copying…</span>
+            )}
+
+            {/* Download Excel */}
+            <button
+              onClick={handleExport}
+              disabled={exportDays.length === 0}
+              className="flex items-center gap-1.5 text-sm bg-emerald-600 text-white px-3 py-1.5 rounded-lg hover:bg-emerald-700 disabled:opacity-40"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Excel
             </button>
-            <button onClick={() => setCopyState('idle')} className="text-gray-500 hover:text-gray-700 px-2 py-1 text-sm">
-              Cancel
-            </button>
-          </span>
-        )}
-        {copyState === 'copying' && (
-          <span className="text-sm text-gray-400">Copying…</span>
-        )}
+          </div>
+        </div>
       </div>
 
       {loading ? (
-        <p className="text-gray-500">Loading…</p>
+        <p className="text-gray-500 px-1">Loading…</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border-collapse bg-white rounded-xl overflow-hidden border border-gray-200 shadow-sm">
+        <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+          <table className="w-full text-sm border-collapse bg-white">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="text-left px-4 py-2 font-semibold text-gray-700 w-48">Person / Task</th>
+              <tr style={{ backgroundColor: '#3730A3' }}>
+                <th className="text-left px-4 py-2.5 font-semibold text-white w-48 text-sm">Person / Task</th>
                 {weekDates.map((d, i) => (
-                  <th key={d} className="px-3 py-2 font-semibold text-gray-700 text-center whitespace-nowrap w-20">
-                    {DAY_LABELS[i]}<br />
-                    <span className="font-normal text-xs text-gray-400">{d.slice(5)}</span>
+                  <th key={d} className="px-2 py-2 text-center w-24">
+                    <div className="flex flex-col items-center gap-0.5">
+                      <span className="font-semibold text-white text-sm">{DAY_LABELS[i]}</span>
+                      <span className="text-indigo-200 text-xs">{d.slice(5)}</span>
+                      <label className="flex items-center gap-1 mt-0.5 cursor-pointer" title="Include in Excel export">
+                        <input
+                          type="checkbox"
+                          checked={exportDays.includes(i)}
+                          onChange={() => toggleExportDay(i)}
+                          className="w-3 h-3 rounded accent-emerald-400 cursor-pointer"
+                        />
+                        <span className="text-indigo-200 text-xs">xlsx</span>
+                      </label>
+                    </div>
                   </th>
                 ))}
-                <th className="px-3 py-2 font-semibold text-gray-700 text-center w-16">Total</th>
+                <th className="px-3 py-2.5 font-semibold text-white text-center w-16 text-sm">Total</th>
               </tr>
             </thead>
             <tbody>
@@ -330,32 +414,62 @@ export default function Actual() {
                 const personGrid = grid[person.id] || {}
                 const taskKeys = Object.keys(personGrid)
 
-                // Per-person totals
                 const personDayTotals = weekDates.map((d) =>
-                  Object.values(personGrid).reduce(
-                    (s, tk) => s + (tk.cells[d]?.hours || 0),
-                    0
-                  )
+                  Object.values(personGrid).reduce((s, tk) => s + (tk.cells[d]?.hours || 0), 0)
                 )
                 const personGrandTotal = personDayTotals.reduce((s, h) => s + h, 0)
-
-                const rowBg = pi % 2 === 0 ? 'bg-white' : 'bg-gray-50'
 
                 return (
                   <>
                     {/* Person name row */}
-                    <tr key={`${person.id}-name`} className={`${rowBg} border-t border-gray-100`}>
-                      <td colSpan={7} className="px-4 py-1.5 font-semibold text-gray-800 text-xs uppercase tracking-wide">
+                    <tr key={`${person.id}-name`} style={{ backgroundColor: '#EEF2FF' }} className="border-t-2 border-indigo-100">
+                      <td colSpan={7} className="px-4 py-2 font-bold text-indigo-800 text-xs uppercase tracking-wider">
                         {person.name}
                       </td>
+                    </tr>
+
+                    {/* Location row */}
+                    <tr key={`${person.id}-loc`} className="border-t border-indigo-100">
+                      <td className="px-4 py-0.5 text-xs text-gray-400">Location</td>
+                      {weekDates.map((d) => {
+                        const loc = locations[person.id]?.[d] || 'office'
+                        const isHome = loc === 'home'
+                        return (
+                          <td key={d} className="px-1 py-0.5 text-center">
+                            <button
+                              onClick={() => handleToggleLocation(person.id, d)}
+                              title={isHome ? 'Home — click to switch to office' : 'Office — click to switch to home'}
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors ${
+                                isHome
+                                  ? 'bg-sky-100 text-sky-700 hover:bg-sky-200'
+                                  : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                              }`}
+                            >
+                              {isHome ? '🏠' : '🏢'}
+                            </button>
+                          </td>
+                        )
+                      })}
+                      <td />
                     </tr>
 
                     {/* Task rows */}
                     {taskKeys.map((key) => {
                       const tk = personGrid[key]
+                      const tcolor = taskColorMap[tk.task_id] || null
                       return (
-                        <tr key={`${person.id}-${key}`} className={rowBg}>
-                          <td className="px-4 py-1 pl-7 text-gray-700">{tk.task_label}</td>
+                        <tr key={`${person.id}-${key}`} className="border-t border-gray-100 hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-0.5 text-gray-700 text-xs">
+                            <div className="flex items-center gap-2">
+                              {tcolor && (
+                                <span
+                                  className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+                                  style={{ backgroundColor: tcolor }}
+                                />
+                              )}
+                              {tk.task_label}
+                            </div>
+                          </td>
                           {weekDates.map((d) => {
                             const cell = tk.cells[d]
                             return (
@@ -367,12 +481,13 @@ export default function Actual() {
                                   taskId={tk.task_id}
                                   taskLabel={tk.task_label}
                                   dateStr={d}
+                                  taskColor={tcolor}
                                   onSave={reload}
                                 />
                               </td>
                             )
                           })}
-                          <td className="px-3 py-1 text-center text-xs font-semibold text-gray-600">
+                          <td className="px-3 py-1 text-center text-xs font-semibold text-gray-500">
                             {Object.values(tk.cells).reduce((s, c) => s + c.hours, 0) || ''}
                           </td>
                         </tr>
@@ -380,12 +495,11 @@ export default function Actual() {
                     })}
 
                     {/* Add task row */}
-                    <tr key={`${person.id}-add`} className={rowBg}>
-                      <td colSpan={7} className="px-4 py-0.5">
+                    <tr key={`${person.id}-add`} className="border-t border-gray-100">
+                      <td colSpan={7} className="px-4 py-1">
                         {addingFor === person.id ? (
                           <AddTaskForm
                             personId={person.id}
-                            weekStart={selectedWeek}
                             weekDates={weekDates}
                             tasks={tasks}
                             onDone={() => { setAddingFor(null); reload() }}
@@ -403,14 +517,14 @@ export default function Actual() {
                     </tr>
 
                     {/* Sub-total row */}
-                    <tr key={`${person.id}-sub`} className={`${rowBg} border-b border-gray-200`}>
-                      <td className="px-4 py-1 pl-7 text-xs text-gray-500 font-medium">Sub-total</td>
+                    <tr key={`${person.id}-sub`} style={{ backgroundColor: '#F0FDF4' }} className="border-t border-green-100">
+                      <td className="px-4 py-1.5 pl-7 text-xs text-green-700 font-semibold">Sub-total</td>
                       {personDayTotals.map((h, i) => (
-                        <td key={i} className="px-3 py-1 text-center text-xs font-semibold text-gray-700">
-                          {h > 0 ? h : <span className="text-gray-300">0</span>}
+                        <td key={i} className="px-3 py-1.5 text-center text-xs font-bold text-green-700">
+                          {h > 0 ? h : <span className="text-green-200">0</span>}
                         </td>
                       ))}
-                      <td className="px-3 py-1 text-center text-xs font-bold text-gray-800">
+                      <td className="px-3 py-1.5 text-center text-xs font-bold text-green-800">
                         {personGrandTotal > 0 ? personGrandTotal : ''}
                       </td>
                     </tr>
@@ -419,14 +533,14 @@ export default function Actual() {
               })}
 
               {/* Team total */}
-              <tr className="bg-indigo-50 border-t-2 border-indigo-200">
-                <td className="px-4 py-2 font-bold text-indigo-900 text-sm">Team total</td>
+              <tr style={{ backgroundColor: '#3730A3' }} className="border-t-2 border-indigo-400">
+                <td className="px-4 py-2.5 font-bold text-white text-sm">Team total</td>
                 {teamTotals.map((h, i) => (
-                  <td key={i} className="px-3 py-2 text-center font-bold text-indigo-800 text-sm">
-                    {h > 0 ? h : <span className="text-indigo-300">0</span>}
+                  <td key={i} className="px-3 py-2.5 text-center font-bold text-indigo-100 text-sm">
+                    {h > 0 ? h : <span className="text-indigo-400">0</span>}
                   </td>
                 ))}
-                <td className="px-3 py-2 text-center font-bold text-indigo-900 text-sm">{teamGrandTotal}</td>
+                <td className="px-3 py-2.5 text-center font-bold text-white text-sm">{teamGrandTotal || ''}</td>
               </tr>
             </tbody>
           </table>

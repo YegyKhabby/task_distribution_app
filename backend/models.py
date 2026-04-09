@@ -119,3 +119,10 @@ class ActualHoursUpdate(BaseModel):
 class CopyWeekRequest(BaseModel):
     week_start: date
     force: bool = False
+    week_start_offset: int = 1
+
+
+class ActualLocationUpsert(BaseModel):
+    person_id: str
+    date: date
+    location: str  # "office" | "home"
