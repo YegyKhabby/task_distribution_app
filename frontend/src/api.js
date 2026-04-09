@@ -46,9 +46,9 @@ export const api = {
 
   // Tasks
   getTasks: () => cached('tasks', () => req('GET', '/tasks')),
-  createTask: (data) => req('POST', '/tasks', data).then(r => { invalidate('tasks'); return r }),
-  updateTask: (id, data) => req('PUT', `/tasks/${id}`, data).then(r => { invalidate('tasks'); return r }),
-  deleteTask: (id) => req('DELETE', `/tasks/${id}`).then(r => { invalidate('tasks'); return r }),
+  createTask: (data) => req('POST', '/tasks', data).then(r => { invalidate('tasks'); localStorage.setItem('dist_stale', 'true'); return r }),
+  updateTask: (id, data) => req('PUT', `/tasks/${id}`, data).then(r => { invalidate('tasks'); localStorage.setItem('dist_stale', 'true'); return r }),
+  deleteTask: (id) => req('DELETE', `/tasks/${id}`).then(r => { invalidate('tasks'); localStorage.setItem('dist_stale', 'true'); return r }),
 
   // Assignments (per week)
   getAssignments: (weekNumber, taskId) => {
@@ -57,12 +57,12 @@ export const api = {
     if (taskId) parts.push(`task_id=${taskId}`)
     return req('GET', `/assignments${parts.length ? '?' + parts.join('&') : ''}`)
   },
-  assignPerson: (data) => req('POST', '/assignments', data),  // data must include week_number
-  unassignPerson: (taskId, personId, weekNumber) => req('DELETE', `/assignments?task_id=${taskId}&person_id=${personId}&week_number=${weekNumber}`),
+  assignPerson: (data) => req('POST', '/assignments', data).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
+  unassignPerson: (taskId, personId, weekNumber) => req('DELETE', `/assignments?task_id=${taskId}&person_id=${personId}&week_number=${weekNumber}`).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
 
   // Fixed hours
   getFixedHours: (taskId) => req('GET', `/assignments/fixed${taskId ? `?task_id=${taskId}` : ''}`),
-  setFixedHours: (data) => req('PUT', '/assignments/fixed', data),
+  setFixedHours: (data) => req('PUT', '/assignments/fixed', data).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
 
   // Distribution (auto)
   previewDistribution: (weekNumber) => req('GET', `/distribute/preview?week_number=${weekNumber}`),
@@ -70,7 +70,7 @@ export const api = {
     week_number: weekNumber,
     effective_from: effectiveFrom,  // ISO date string e.g. "2026-04-07"
     overrides: overrides || null,
-  }),
+  }).then(r => { localStorage.removeItem('dist_stale'); return r }),
 
   // Distribution (saved matrix — for Matrix page)
   getDistribution: (weekNumber) => req('GET', `/distribution${weekNumber != null ? `?week_number=${weekNumber}` : ''}`),

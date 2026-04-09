@@ -310,6 +310,7 @@ export default function Calendar() {
     return localStorage.getItem(`cal_overflow_${now.getFullYear()}_${now.getMonth() + 1}`) === 'true'
   })
   const [exporting, setExporting] = useState(false)
+  const [distStale, setDistStale] = useState(() => localStorage.getItem('dist_stale') === 'true')
 
   useEffect(() => {
     api.getPeople().then(all => {
@@ -358,6 +359,12 @@ export default function Calendar() {
 
   return (
     <div>
+      {distStale && (
+        <div className="flex items-center gap-3 mb-4 bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-2.5 rounded-lg">
+          <span>⚠ Task assignments have changed — run <strong>Confirm Distribution</strong> in Manager to see updates here.</span>
+          <button onClick={() => { localStorage.removeItem('dist_stale'); setDistStale(false) }} className="ml-auto text-amber-600 hover:text-amber-800 font-medium shrink-0">Dismiss</button>
+        </div>
+      )}
       <h1 className="text-2xl font-bold mb-5">Monthly Calendar</h1>
 
       <div className="flex flex-wrap items-center gap-4 mb-6">

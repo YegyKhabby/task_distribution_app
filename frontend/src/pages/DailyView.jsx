@@ -153,6 +153,7 @@ export default function DailyView() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [distStale, setDistStale] = useState(() => localStorage.getItem('dist_stale') === 'true')
 
   useEffect(() => {
     if (isWeekend(date)) {
@@ -176,6 +177,12 @@ export default function DailyView() {
 
   return (
     <div className="max-w-2xl mx-auto">
+      {distStale && (
+        <div className="flex items-center gap-3 mb-4 bg-amber-50 border border-amber-200 text-amber-800 text-sm px-4 py-2.5 rounded-lg">
+          <span>⚠ Task assignments have changed — run <strong>Confirm Distribution</strong> in Manager to see updates here.</span>
+          <button onClick={() => { localStorage.removeItem('dist_stale'); setDistStale(false) }} className="ml-auto text-amber-600 hover:text-amber-800 font-medium shrink-0">Dismiss</button>
+        </div>
+      )}
       {/* Title + download */}
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-bold text-gray-900">Daily View</h1>
