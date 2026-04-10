@@ -128,8 +128,7 @@ def compute_preview(week_number: int, week_start_date: date = None):
         week_start_date = next_monday(date.today())
     people, tasks, assignments, fixed_rows = fetch_all(week_number, week_start_date)
 
-    # Map week_number to legacy week_scope filter value
-    week_scope_filter = "W1" if week_number == 1 else "W234"
+    week_scope_filter = f"W{week_number}"
 
     person_map = {p["id"]: p for p in people}
 
@@ -150,7 +149,9 @@ def compute_preview(week_number: int, week_start_date: date = None):
     for t in tasks:
         scope = t.get("week_scope", "both")
         if scope != "both" and scope != week_scope_filter:
-            continue
+            # legacy W234: matches weeks 2, 3, 4
+            if not (scope == "W234" and week_number in (2, 3, 4)):
+                continue
         if t.get("is_fill"):
             fill_tasks.append(t)
         else:
@@ -333,7 +334,7 @@ def confirm_distribution(body: DistributeRequest):
     # Snap effective_from to Monday (default = next Monday from today)
     raw_date = body.effective_from or date.today()
     # Always snap to the NEXT upcoming Monday — never today even if today is Monday
-    days_ahead = (7 - raw_date.weekday()) % 7 or 7
+    days_ahead = (7 - raw_date.weekday()) % 7
     effective_from = raw_date + timedelta(days=days_ahead)
     effective_from_str = str(effective_from)
 

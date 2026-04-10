@@ -438,7 +438,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
                   )}
                   {t.priority && <span className="text-xs text-gray-400 shrink-0">P{t.priority}</span>}
                   <span className="text-xs text-gray-400 shrink-0">
-                    {t.week_scope === 'W1' ? 'W1 only' : t.week_scope === 'W234' ? 'W2–4 only' : ''}
+                    {t.week_scope && t.week_scope !== 'both' ? `${t.week_scope.replace('W234', 'W2–4')} only` : ''}
                   </span>
                   {t.responsible_person && (
                     <span className="text-xs font-medium bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full shrink-0">
@@ -466,6 +466,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
                     error={formError}
                     onSave={save}
                     onCancel={() => { setEditing(null); setExpanded(null) }}
+                    weekNumber={weekNumber}
                     responsiblePersons={responsiblePersons.map(rp => rp.name)}
                   />
                 </div>
@@ -588,6 +589,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
               onSave={save}
               onCancel={() => setEditing(null)}
               isNew
+              weekNumber={weekNumber}
               responsiblePersons={responsiblePersons.map(rp => rp.name)}
             />
           </div>
@@ -611,7 +613,7 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
   )
 }
 
-function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePersons }) {
+function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 1, responsiblePersons }) {
   return (
     <div className="flex flex-wrap items-end gap-2 w-full">
       <div className="flex flex-col gap-1 w-full">
@@ -646,15 +648,22 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePe
       </div>
       <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-400">Week scope</span>
-        <select
-          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          value={form.week_scope}
-          onChange={(e) => setForm({ ...form, week_scope: e.target.value })}
-        >
-          <option value="both">Every week</option>
-          <option value="W1">Week 1 only</option>
-          <option value="W234">Week 2–3–4 only</option>
-        </select>
+        <div className="flex rounded-md border border-gray-300 overflow-hidden w-fit text-sm">
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, week_scope: 'both' })}
+            className={`px-3 py-1.5 ${form.week_scope === 'both' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+          >
+            All weeks
+          </button>
+          <button
+            type="button"
+            onClick={() => setForm({ ...form, week_scope: `W${weekNumber}` })}
+            className={`px-3 py-1.5 border-l border-gray-300 ${form.week_scope !== 'both' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+          >
+            Week {weekNumber} only
+          </button>
+        </div>
       </div>
       <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-400">Full-time responsible</span>
@@ -709,7 +718,7 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, responsiblePe
 function nextMonday() {
   const d = new Date()
   const day = d.getDay() // 0=Sun,1=Mon,...
-  const daysUntilMonday = (8 - day) % 7 || 7
+  const daysUntilMonday = (8 - day) % 7
   d.setDate(d.getDate() + daysUntilMonday)
   return d.toISOString().slice(0, 10)
 }
