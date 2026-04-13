@@ -89,7 +89,8 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
     dist_all = active_distribution_rows(dist_res.data, week_start_str)
 
     # Compute weekly hours from person_schedule (not the stale people.weekly_hours column)
-    all_pids = list({d["person_id"] for d in dist_all})
+    # Include absent_people so weekly_hours is correct even for people with no distributions
+    all_pids = list({d["person_id"] for d in dist_all} | set(absent_people.keys()))
     if all_pids:
         sched_rows_bulk = supabase.table("person_schedule").select(
             "person_id, day_of_week, hours, valid_from, valid_until"
@@ -130,11 +131,9 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
     # Compute spare hours per person: weekly_hours - sum(all task hours)
     spare_hours: dict[str, float] = {}
     for pid, tasks_list in person_tasks.items():
-        dist_entry = next((d for d in dist_all if d["person_id"] == pid), None)
-        if dist_entry:
-            weekly = weekly_hours_map.get(pid, 0.0)
-            total_task_hrs = sum(t["hours_per_week"] for t in tasks_list)
-            spare_hours[pid] = max(0.0, weekly - total_task_hrs)
+        weekly = weekly_hours_map.get(pid, 0.0)
+        total_task_hrs = sum(t["hours_per_week"] for t in tasks_list)
+        spare_hours[pid] = max(0.0, weekly - total_task_hrs)
 
     # 3. Get confirmed reallocations for this week (reduces unallocated)
     reallocations_res = supabase.table("temporary_reallocations").select(
