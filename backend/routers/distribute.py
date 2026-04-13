@@ -129,8 +129,6 @@ def compute_preview(week_number: int, week_start_date: date = None):
         week_start_date = next_monday(date.today())
     people, tasks, assignments, fixed_rows = fetch_all(week_number, week_start_date)
 
-    week_scope_filter = f"W{week_number}"
-
     person_map = {p["id"]: p for p in people}
 
     task_assigned: dict[str, set] = defaultdict(set)
@@ -144,14 +142,13 @@ def compute_preview(week_number: int, week_start_date: date = None):
     # Total weekly capacity per person
     capacity = {p["id"]: compute_weekly_hours(p) for p in people}
 
-    # Separate normal tasks from fill tasks, respect week_scope
+    # Separate normal tasks from fill tasks
+    # repeats_weekly=False tasks are only included if they have assignments this week
     normal_tasks = []
     fill_tasks = []
     for t in tasks:
-        scope = t.get("week_scope", "both")
-        if scope != "both" and scope != week_scope_filter:
-            # legacy W234: matches weeks 2, 3, 4
-            if not (scope == "W234" and week_number in (2, 3, 4)):
+        if not t.get("repeats_weekly", True):
+            if not task_assigned.get(t["id"]):
                 continue
         if t.get("is_fill"):
             fill_tasks.append(t)
@@ -346,7 +343,8 @@ def confirm_distribution(body: DistributeRequest):
 
     total_saved = 0
 
-    for wn in [1, 2, 3, 4]:
+    weeks_to_save = [body.week_number] if body.week_only else [1, 2, 3, 4]
+    for wn in weeks_to_save:
         preview = compute_preview(wn, effective_from)
 
         # Read preferred_days from task_people for this week_number
@@ -379,10 +377,13 @@ def confirm_distribution(body: DistributeRequest):
                     rows.append(row)
 
         if rows:
-            # Upsert — conflict on (person_id, task_id, week_number, valid_from)
-            supabase.table("task_distribution").upsert(
-                rows, on_conflict="person_id,task_id,week_number,valid_from"
-            ).execute()
+            # Delete all existing rows for this (week_number, valid_from) before inserting
+            # to ensure stale allocations from previous confirms don't linger.
+            supabase.table("task_distribution").delete()\
+                .eq("week_number", wn)\
+                .eq("valid_from", effective_from_str)\
+                .execute()
+            supabase.table("task_distribution").insert(rows).execute()
             total_saved += len(rows)
 
     if total_saved == 0:
