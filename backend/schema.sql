@@ -2,7 +2,7 @@
 
 create extension if not exists "pgcrypto";
 
--- People (name only — hours come from their schedule)
+-- People (name only — weekly_hours comes from person_schedule, not stored here)
 create table if not exists people (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -28,6 +28,7 @@ create table if not exists tasks (
   priority int,
   color text,
   weekly_hours_target numeric not null default 0,  -- total hrs/week the task needs
+  repeats_weekly boolean not null default true,     -- false = only runs in certain weeks (e.g. W1 or W234)
   created_at timestamptz default now()
 );
 
