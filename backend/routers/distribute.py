@@ -147,9 +147,6 @@ def compute_preview(week_number: int, week_start_date: date = None):
     normal_tasks = []
     fill_tasks = []
     for t in tasks:
-        if not t.get("repeats_weekly", True):
-            if not task_assigned.get(t["id"]):
-                continue
         if t.get("is_fill"):
             fill_tasks.append(t)
         else:
