@@ -28,7 +28,7 @@ create table if not exists tasks (
   priority int,
   color text,
   weekly_hours_target numeric not null default 0,  -- total hrs/week the task needs
-  repeats_weekly boolean not null default true,     -- false = only runs in certain weeks (e.g. W1 or W234)
+  repeats_weekly boolean not null default true,     -- false = only distributed in weeks where explicit task_people assignments exist
   created_at timestamptz default now()
 );
 

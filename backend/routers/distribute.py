@@ -377,8 +377,8 @@ def confirm_distribution(body: DistributeRequest):
                     rows.append(row)
 
         if rows:
-            # Delete all existing rows for this (week_number, valid_from) before inserting
-            # to ensure stale allocations from previous confirms don't linger.
+            # Delete then insert (not atomic — if insert fails, rows for this week/date
+            # are gone; acceptable since confirm can be re-run to restore them).
             supabase.table("task_distribution").delete()\
                 .eq("week_number", wn)\
                 .eq("valid_from", effective_from_str)\
