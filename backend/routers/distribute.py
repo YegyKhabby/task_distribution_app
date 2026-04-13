@@ -143,7 +143,6 @@ def compute_preview(week_number: int, week_start_date: date = None):
     capacity = {p["id"]: compute_weekly_hours(p) for p in people}
 
     # Separate normal tasks from fill tasks
-    # repeats_weekly=False tasks are only included if they have assignments this week
     normal_tasks = []
     fill_tasks = []
     for t in tasks:

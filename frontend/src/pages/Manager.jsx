@@ -40,9 +40,8 @@ function exportTasksExcel(tasks, people, distribution, weekNumber) {
     setCell(ri + 2, 0, t.name, 's', taskStyle)
     setCell(ri + 2, 1, t.priority ?? '', t.priority != null ? 'n' : 's', NUM)
     setCell(ri + 2, 2, t.is_fill ? '—' : (t.weekly_hours_target || 0), t.is_fill ? 's' : 'n', NUM)
-    setCell(ri + 2, 3, t.repeats_weekly !== false ? 'All weeks' : 'Once', 's', NUM)
-    setCell(ri + 2, 4, t.responsible_person || '', 's', LEFT)
-    setCell(ri + 2, 5, t.schedule_rule || '', 's', LEFT)
+    setCell(ri + 2, 3, t.responsible_person || '', 's', LEFT)
+    setCell(ri + 2, 4, t.schedule_rule || '', 's', LEFT)
     let taskRowTotal = 0
     people.forEach((p, i) => {
       const hrs = (distMap[p.id] || {})[t.id] || 0
@@ -150,7 +149,7 @@ const DAY_OPTIONS = [
 function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanningDate }) {
   // ── Task editing state ──
   const [editing, setEditing] = useState(null)
-  const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', repeats_weekly: true, is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
+  const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
   const [formError, setFormError] = useState('')
   const [pendingTaskDelete, setPendingTaskDelete] = useState(null)
   const [responsiblePersons, setResponsiblePersons] = useState([])
@@ -255,13 +254,13 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
 
   // ── Task CRUD ──
   const startAdd = () => {
-    setForm({ name: '', weekly_hours_target: '', color: COLORS[Math.floor(Math.random() * COLORS.length)], priority: tasks.length + 1, repeats_weekly: true, is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
+    setForm({ name: '', weekly_hours_target: '', color: COLORS[Math.floor(Math.random() * COLORS.length)], priority: tasks.length + 1, is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
     setEditing('new')
     setFormError('')
   }
 
   const startEdit = (t) => {
-    setForm({ name: t.name, weekly_hours_target: t.weekly_hours_target, color: t.color || COLORS[0], priority: t.priority || '', repeats_weekly: t.repeats_weekly !== false, is_fill: t.is_fill || false, responsible_person: t.responsible_person || '', schedule_rule: t.schedule_rule || '', split_equally: t.split_equally || false })
+    setForm({ name: t.name, weekly_hours_target: t.weekly_hours_target, color: t.color || COLORS[0], priority: t.priority || '', is_fill: t.is_fill || false, responsible_person: t.responsible_person || '', schedule_rule: t.schedule_rule || '', split_equally: t.split_equally || false })
     setEditing(t.id)
     setFormError('')
   }
@@ -274,7 +273,6 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
       weekly_hours_target: form.is_fill ? 0 : Number(form.weekly_hours_target),
       color: form.color,
       priority: form.priority ? Number(form.priority) : null,
-      repeats_weekly: form.repeats_weekly,
       is_fill: form.is_fill,
       responsible_person: form.responsible_person || null,
       schedule_rule: form.is_fill ? null : (form.schedule_rule || null),
@@ -445,9 +443,6 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
                     </span>
                   )}
                   {t.priority && <span className="text-xs text-gray-400 shrink-0">P{t.priority}</span>}
-                  <span className="text-xs text-gray-400 shrink-0">
-                    {t.repeats_weekly === false ? 'once only' : ''}
-                  </span>
                   {t.responsible_person && (
                     <span className="text-xs font-medium bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full shrink-0">
                       {t.responsible_person}
@@ -653,18 +648,6 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 
           value={form.priority}
           onChange={(e) => setForm({ ...form, priority: e.target.value })}
         />
-      </div>
-      <div className="flex flex-col gap-1">
-        <span className="text-xs text-gray-400">Week scope</span>
-        <label className="flex items-center gap-2 h-[34px] cursor-pointer">
-          <input
-            type="checkbox"
-            checked={form.repeats_weekly}
-            onChange={(e) => setForm({ ...form, repeats_weekly: e.target.checked })}
-            className="w-4 h-4 rounded text-indigo-600"
-          />
-          <span className="text-sm text-gray-700">Repeats every week</span>
-        </label>
       </div>
       <div className="flex flex-col gap-1">
         <span className="text-xs text-gray-400">Full-time responsible</span>

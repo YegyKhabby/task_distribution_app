@@ -25,7 +25,6 @@ class TaskCreate(BaseModel):
     priority: Optional[int] = None
     color: Optional[str] = None
     weekly_hours_target: float = 0
-    repeats_weekly: bool = True
     is_fill: bool = False      # if True: absorbs each person's spare hours after all other tasks
     responsible_person: Optional[str] = None
     schedule_rule: Optional[str] = None  # distribution rule: one_day, two_days, flexible_days, first_work_day, do_not_split, proportional, equal_per_day
@@ -37,7 +36,6 @@ class TaskUpdate(BaseModel):
     priority: Optional[int] = None
     color: Optional[str] = None
     weekly_hours_target: Optional[float] = None
-    repeats_weekly: Optional[bool] = None
     is_fill: Optional[bool] = None
     responsible_person: Optional[str] = None
     schedule_rule: Optional[str] = None
