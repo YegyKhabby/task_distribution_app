@@ -25,8 +25,14 @@ def fetch_all(week_number: int, week_start_date: date):
             r["person_id"] = p["id"]
         p["person_schedule"] = active_schedule_rows(rows, week_start_str)
     tasks = supabase.table("tasks").select("*").execute().data
+    week_settings = supabase.table("task_week_settings").select("task_id, weekly_hours_target").eq("week_number", week_number).execute().data
+    settings_by_task = {row["task_id"]: row for row in week_settings}
+    for task in tasks:
+        override = settings_by_task.get(task["id"])
+        if override:
+            task["weekly_hours_target"] = override["weekly_hours_target"]
     assignments = supabase.table("task_people").select("task_id, person_id").eq("week_number", week_number).execute().data
-    fixed = supabase.table("task_fixed_hours").select("task_id, person_id, hours").execute().data
+    fixed = supabase.table("task_fixed_hours").select("task_id, person_id, hours").eq("week_number", week_number).execute().data
     return people_raw, tasks, assignments, fixed
 
 

@@ -1,6 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from database import supabase
-from models import TaskCreate, TaskUpdate
+from models import TaskCreate, TaskUpdate, TaskWeekSettingsUpdate
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -8,6 +8,12 @@ router = APIRouter(prefix="/tasks", tags=["tasks"])
 @router.get("")
 def list_tasks():
     res = supabase.table("tasks").select("*").order("priority").execute()
+    return res.data
+
+
+@router.get("/week-settings")
+def list_task_week_settings(week_number: int = Query(..., ge=1, le=4)):
+    res = supabase.table("task_week_settings").select("*").eq("week_number", week_number).execute()
     return res.data
 
 
@@ -31,3 +37,16 @@ def update_task(task_id: str, body: TaskUpdate):
 @router.delete("/{task_id}", status_code=204)
 def delete_task(task_id: str):
     supabase.table("tasks").delete().eq("id", task_id).execute()
+
+
+@router.put("/{task_id}/week-settings")
+def update_task_week_settings(task_id: str, body: TaskWeekSettingsUpdate):
+    res = supabase.table("task_week_settings").upsert(
+        {
+            "task_id": task_id,
+            "week_number": body.week_number,
+            "weekly_hours_target": body.weekly_hours_target,
+        },
+        on_conflict="task_id,week_number",
+    ).execute()
+    return res.data[0]

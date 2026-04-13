@@ -56,8 +56,13 @@ export const api = {
 
   // Tasks
   getTasks: () => cached('tasks', () => req('GET', '/tasks')),
+  getTaskWeekSettings: (weekNumber) => req('GET', `/tasks/week-settings?week_number=${weekNumber}`),
   createTask: (data) => req('POST', '/tasks', data).then(r => { invalidate('tasks'); localStorage.setItem('dist_stale', 'true'); return r }),
   updateTask: (id, data) => req('PUT', `/tasks/${id}`, data).then(r => { invalidate('tasks'); localStorage.setItem('dist_stale', 'true'); return r }),
+  updateTaskWeekSettings: (id, weekNumber, weeklyHoursTarget) => req('PUT', `/tasks/${id}/week-settings`, {
+    week_number: weekNumber,
+    weekly_hours_target: weeklyHoursTarget,
+  }).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
   deleteTask: (id) => req('DELETE', `/tasks/${id}`).then(r => { invalidate('tasks'); localStorage.setItem('dist_stale', 'true'); return r }),
 
   // Assignments (per week)
@@ -71,14 +76,20 @@ export const api = {
   unassignPerson: (taskId, personId, weekNumber) => req('DELETE', `/assignments?task_id=${taskId}&person_id=${personId}&week_number=${weekNumber}`).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
 
   // Fixed hours
-  getFixedHours: (taskId) => req('GET', `/assignments/fixed${taskId ? `?task_id=${taskId}` : ''}`),
+  getFixedHours: (taskId, weekNumber) => {
+    const parts = []
+    if (taskId) parts.push(`task_id=${taskId}`)
+    if (weekNumber != null) parts.push(`week_number=${weekNumber}`)
+    return req('GET', `/assignments/fixed${parts.length ? `?${parts.join('&')}` : ''}`)
+  },
   setFixedHours: (data) => req('PUT', '/assignments/fixed', data).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
 
   // Distribution (auto)
   previewDistribution: (weekNumber, weekStart) => req('GET', `/distribute/preview?week_number=${weekNumber}${weekStart ? `&week_start=${weekStart}` : ''}`),
-  confirmDistribution: (weekNumber, effectiveFrom, overrides) => req('POST', '/distribute/confirm', {
+  confirmDistribution: (weekNumber, effectiveFrom, overrides, weekOnly = false) => req('POST', '/distribute/confirm', {
     week_number: weekNumber,
-    effective_from: effectiveFrom,  // ISO date string e.g. "2026-04-07"
+    effective_from: effectiveFrom,
+    week_only: weekOnly,
     overrides: overrides || null,
   }).then(r => { localStorage.removeItem('dist_stale'); return r }),
 

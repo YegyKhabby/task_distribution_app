@@ -91,18 +91,15 @@ export default function Manager() {
   const [tab, setTab] = useState('Tasks')
   const [tasks, setTasks] = useState([])
   const [people, setPeople] = useState([])
-  const [fixedHours, setFixedHours] = useState([])
   const [planningDate, setPlanningDate] = useState(nextMondayDateString)
 
   const reload = useCallback(async () => {
-    const [t, p, f] = await Promise.all([
+    const [t, p] = await Promise.all([
       api.getTasks(),
       api.getPeople(planningDate),
-      api.getFixedHours(),
     ])
     setTasks([...t].sort((a, b) => a.name.localeCompare(b.name)))
     setPeople(p.filter((x) => x.active).sort((a, b) => a.name.localeCompare(b.name)))
-    setFixedHours(f)
   }, [planningDate])
 
   useEffect(() => { reload() }, [reload])
@@ -127,7 +124,7 @@ export default function Manager() {
       </div>
 
       {tab === 'Tasks' && (
-        <TasksTab tasks={tasks} people={people} fixedHours={fixedHours} onReload={reload} planningDate={planningDate} setPlanningDate={setPlanningDate} />
+        <TasksTab tasks={tasks} people={people} onReload={reload} planningDate={planningDate} setPlanningDate={setPlanningDate} />
       )}
       {tab === 'Distribute' && (
         <DistributeTab tasks={tasks} people={people} effectiveFrom={planningDate} setEffectiveFrom={setPlanningDate} />
@@ -146,7 +143,7 @@ const DAY_OPTIONS = [
   { value: 5, label: 'Fri' },
 ]
 
-function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanningDate }) {
+function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   // ── Task editing state ──
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
@@ -166,6 +163,8 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
   const [weekNumber, setWeekNumber] = useState(1)
   const [weekAssignments, setWeekAssignments] = useState([])
   const [distribution, setDistribution] = useState([])
+  const [weekFixedHours, setWeekFixedHours] = useState([])
+  const [weekSettings, setWeekSettings] = useState([])
   const [thisWeekOnly, setThisWeekOnly] = useState(new Set())
 
   // ── Hours summary state ──
@@ -173,12 +172,16 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
 
   // ── Load week assignments + distribution ──
   const loadWeekData = useCallback(async (wn) => {
-    const [a, d] = await Promise.all([
+    const [a, d, f, s] = await Promise.all([
       api.getAssignments(wn),
       api.getDistribution(wn),
+      api.getFixedHours(null, wn),
+      api.getTaskWeekSettings(wn),
     ])
     setWeekAssignments(a)
     setDistribution(d)
+    setWeekFixedHours(f)
+    setWeekSettings(s)
   }, [])
 
   useEffect(() => { loadWeekData(weekNumber) }, [weekNumber, loadWeekData])
@@ -187,6 +190,8 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
     setWeekNumber(wn)
     setWeekAssignments([])
     setDistribution([])
+    setWeekFixedHours([])
+    setWeekSettings([])
   }
 
   // ── Load Freshdesk distribution averages ──
@@ -219,9 +224,19 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
   }
 
   const fixedMap = {}
-  for (const f of fixedHours) {
+  for (const f of weekFixedHours) {
     fixedMap[`${f.task_id}:${f.person_id}`] = f.hours
   }
+
+  const weekTargetMap = {}
+  for (const row of weekSettings) {
+    weekTargetMap[row.task_id] = row.weekly_hours_target
+  }
+
+  const displayedTasks = tasks.map((t) => ({
+    ...t,
+    weekly_hours_target: weekTargetMap[t.id] ?? t.weekly_hours_target,
+  }))
 
   const preferredDayMap = {}
   for (const a of weekAssignments) {
@@ -268,9 +283,8 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
   const save = async () => {
     if (!form.name.trim()) { setFormError('Name required'); return }
     if (!form.is_fill && (!form.weekly_hours_target || Number(form.weekly_hours_target) < 0)) { setFormError('Hours required (or check Fill spare hours)'); return }
-    const data = {
+    const globalData = {
       name: form.name.trim(),
-      weekly_hours_target: form.is_fill ? 0 : Number(form.weekly_hours_target),
       color: form.color,
       priority: form.priority ? Number(form.priority) : null,
       is_fill: form.is_fill,
@@ -279,22 +293,34 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
       split_equally: form.is_fill ? false : form.split_equally,
     }
     try {
-      if (editing === 'new') await api.createTask(data)
-      else await api.updateTask(editing, data)
+      if (editing === 'new') {
+        await api.createTask({
+          ...globalData,
+          weekly_hours_target: form.is_fill ? 0 : Number(form.weekly_hours_target),
+        })
+      } else {
+        await api.updateTask(editing, globalData)
+        const targetValue = form.is_fill ? 0 : Number(form.weekly_hours_target)
+        await Promise.all(weeksFor(editing).map((wn) =>
+          api.updateTaskWeekSettings(editing, wn, targetValue)
+        ))
+      }
       setEditing(null)
       setExpanded(null)
-      onReload()
+      await onReload()
+      await loadWeekData(weekNumber)
     } catch (e) { setFormError(e.message) }
   }
 
   const remove = async (id) => {
     await api.deleteTask(id)
     setPendingTaskDelete(null)
-    onReload()
+    await onReload()
+    await loadWeekData(weekNumber)
   }
 
   // ── Assignment actions ──
-  const weeksFor = (taskId) => thisWeekOnly.has(taskId) ? [weekNumber] : [1, 2, 3, 4]
+  const weeksFor = (taskId) => thisWeekOnly.has(taskId) ? [1, 2, 3, 4] : [weekNumber]
 
   const toggleAssign = async (taskId, personId, currently_assigned) => {
     const key = `${taskId}:${personId}`
@@ -309,8 +335,10 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
   }
 
   const updateFixed = async (taskId, personId, hours) => {
-    await api.setFixedHours({ task_id: taskId, person_id: personId, hours: Number(hours) })
-    await onReload()
+    await Promise.all(weeksFor(taskId).map((wn) =>
+      api.setFixedHours({ task_id: taskId, person_id: personId, week_number: wn, hours: Number(hours) })
+    ))
+    await loadWeekData(weekNumber)
   }
 
   const updatePreferredDays = async (taskId, personId, days) => {
@@ -369,7 +397,7 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
             className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
           />
           <button
-            onClick={() => exportTasksExcel(tasks, people, distribution, weekNumber)}
+            onClick={() => exportTasksExcel(displayedTasks, people, distribution, weekNumber)}
             className="text-sm text-gray-600 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
           >
             Download Excel
@@ -413,7 +441,7 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
 
       {/* ── Task list ── */}
       <div className="space-y-3">
-        {tasks.map((t) => {
+        {displayedTasks.map((t) => {
           const assigned = assignedMap[t.id] || new Set()
           const isOpen = expanded === t.id
           const isEditing = editing === t.id
@@ -493,11 +521,11 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
                       )}
                       <label className="flex items-center gap-2 cursor-pointer select-none">
                         <span className="text-xs text-gray-500">
-                          {thisWeekOnly.has(t.id) ? `Week ${weekNumber} only` : 'All weeks'}
+                          {thisWeekOnly.has(t.id) ? 'All weeks' : `Week ${weekNumber} only`}
                         </span>
                         <div
                           onClick={() => toggleThisWeekOnly(t.id)}
-                          className={`relative w-8 h-4 rounded-full transition-colors ${thisWeekOnly.has(t.id) ? 'bg-amber-400' : 'bg-indigo-500'}`}
+                          className={`relative w-8 h-4 rounded-full transition-colors ${thisWeekOnly.has(t.id) ? 'bg-indigo-500' : 'bg-amber-400'}`}
                         >
                           <span className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${thisWeekOnly.has(t.id) ? 'translate-x-4' : ''}`} />
                         </div>
@@ -534,6 +562,7 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
                             <>
                               <div className="flex items-center gap-2">
                                 <input
+                                  key={`${key}:${weekNumber}:${fixed ?? ''}`}
                                   type="number"
                                   min={0}
                                   step={0.5}
@@ -598,7 +627,7 @@ function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanni
           </div>
         )}
 
-        {tasks.length === 0 && editing !== 'new' && (
+        {displayedTasks.length === 0 && editing !== 'new' && (
           <p className="text-center text-gray-400 py-12">No tasks yet. Click + Add Task to get started.</p>
         )}
       </div>
@@ -630,7 +659,7 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 
         />
       </div>
       <div className="flex flex-col gap-1 w-28">
-        <span className="text-xs text-gray-400">Hrs / week</span>
+        <span className="text-xs text-gray-400">Hrs / week for W{weekNumber}</span>
         <input
           type="number" min={0} step={0.5}
           className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
@@ -650,7 +679,7 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 
         />
       </div>
       <div className="flex flex-col gap-1">
-        <span className="text-xs text-gray-400">Full-time responsible</span>
+        <span className="text-xs text-gray-400">Full-time responsible (global)</span>
         <select
           className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
           value={form.responsible_person}

@@ -39,8 +39,17 @@ def active_schedule_rows(rows, week_start_str: str) -> list:
 def active_distribution_rows(rows, week_start_str: str) -> list:
     """
     From a list of task_distribution rows (with valid_from),
-    return one row per (person_id, task_id) — the most recent version
-    valid for the given week_start date.
+    return the rows belonging to the latest saved version active for
+    week_start_str.
+
+    A "version" is all distribution rows sharing the same valid_from date.
+    The latest version whose valid_from <= week_start_str wins completely.
+    Rows missing from that version are treated as 0h, so we must not fall
+    back to older versions task-by-task.
     """
     filtered = [r for r in rows if (r.get("valid_from") or "2000-01-01") <= week_start_str]
-    return _latest_by(filtered, lambda r: (r["person_id"], r["task_id"]))
+    if not filtered:
+        return []
+    latest_version = max(r.get("valid_from") or "2000-01-01" for r in filtered)
+    version_rows = [r for r in filtered if (r.get("valid_from") or "2000-01-01") == latest_version]
+    return _latest_by(version_rows, lambda r: (r["person_id"], r["task_id"], r.get("week_number", "")))

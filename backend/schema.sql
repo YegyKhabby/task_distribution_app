@@ -46,8 +46,18 @@ create table if not exists task_fixed_hours (
   id uuid primary key default gen_random_uuid(),
   task_id uuid references tasks(id) on delete cascade,
   person_id uuid references people(id) on delete cascade,
+  week_number int not null check (week_number between 1 and 4),
   hours numeric not null default 0,
-  unique(task_id, person_id)
+  unique(task_id, person_id, week_number)
+);
+
+-- Week-specific task settings
+create table if not exists task_week_settings (
+  id uuid primary key default gen_random_uuid(),
+  task_id uuid references tasks(id) on delete cascade,
+  week_number int not null check (week_number between 1 and 4),
+  weekly_hours_target numeric not null default 0,
+  unique(task_id, week_number)
 );
 
 -- Final distribution output (written by the distribute endpoint)
@@ -143,6 +153,10 @@ create policy "allow all" on task_people for all using (true) with check (true);
 alter table task_fixed_hours enable row level security;
 drop policy if exists "allow all" on task_fixed_hours;
 create policy "allow all" on task_fixed_hours for all using (true) with check (true);
+
+alter table task_week_settings enable row level security;
+drop policy if exists "allow all" on task_week_settings;
+create policy "allow all" on task_week_settings for all using (true) with check (true);
 
 alter table task_distribution enable row level security;
 drop policy if exists "allow all" on task_distribution;

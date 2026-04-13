@@ -51,6 +51,7 @@ class TaskPersonAssign(BaseModel):
 class TaskFixedHours(BaseModel):
     task_id: str
     person_id: str
+    week_number: int  # 1–4
     hours: float
 
 
@@ -67,6 +68,11 @@ class PreferredDayUpdate(BaseModel):
     person_id: str
     week_number: int  # 1–4
     preferred_days: Optional[list[int]] = None  # list of 1–5, or None to clear
+
+
+class TaskWeekSettingsUpdate(BaseModel):
+    week_number: int  # 1–4
+    weekly_hours_target: float
 
 
 class AbsenceCreate(BaseModel):
