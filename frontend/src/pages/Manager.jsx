@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
 import ConfirmDialog from '../components/ConfirmDialog'
+import { nextMondayDateString } from '../utils/dates'
 
 function exportTasksExcel(tasks, people, distribution, weekNumber) {
   const distMap = {}
@@ -92,17 +93,18 @@ export default function Manager() {
   const [tasks, setTasks] = useState([])
   const [people, setPeople] = useState([])
   const [fixedHours, setFixedHours] = useState([])
+  const [planningDate, setPlanningDate] = useState(nextMondayDateString)
 
   const reload = useCallback(async () => {
     const [t, p, f] = await Promise.all([
       api.getTasks(),
-      api.getPeople(),
+      api.getPeople(planningDate),
       api.getFixedHours(),
     ])
     setTasks([...t].sort((a, b) => a.name.localeCompare(b.name)))
     setPeople(p.filter((x) => x.active).sort((a, b) => a.name.localeCompare(b.name)))
     setFixedHours(f)
-  }, [])
+  }, [planningDate])
 
   useEffect(() => { reload() }, [reload])
 
@@ -126,10 +128,10 @@ export default function Manager() {
       </div>
 
       {tab === 'Tasks' && (
-        <TasksTab tasks={tasks} people={people} fixedHours={fixedHours} onReload={reload} />
+        <TasksTab tasks={tasks} people={people} fixedHours={fixedHours} onReload={reload} planningDate={planningDate} setPlanningDate={setPlanningDate} />
       )}
       {tab === 'Distribute' && (
-        <DistributeTab tasks={tasks} people={people} />
+        <DistributeTab tasks={tasks} people={people} effectiveFrom={planningDate} setEffectiveFrom={setPlanningDate} />
       )}
     </div>
   )
@@ -145,7 +147,7 @@ const DAY_OPTIONS = [
   { value: 5, label: 'Fri' },
 ]
 
-function TasksTab({ tasks, people, fixedHours, onReload }) {
+function TasksTab({ tasks, people, fixedHours, onReload, planningDate, setPlanningDate }) {
   // ── Task editing state ──
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', week_scope: 'both', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
@@ -362,6 +364,12 @@ function TasksTab({ tasks, people, fixedHours, onReload }) {
           ))}
         </div>
         <div className="flex gap-2 ml-auto">
+          <input
+            type="date"
+            value={planningDate}
+            onChange={(e) => setPlanningDate(e.target.value)}
+            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
           <button
             onClick={() => exportTasksExcel(tasks, people, distribution, weekNumber)}
             className="text-sm text-gray-600 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
@@ -715,17 +723,8 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 
 
 // ── Distribute Tab ─────────────────────────────────────────────────────────
 
-function nextMonday() {
-  const d = new Date()
-  const day = d.getDay() // 0=Sun,1=Mon,...
-  const daysUntilMonday = (8 - day) % 7
-  d.setDate(d.getDate() + daysUntilMonday)
-  return d.toISOString().slice(0, 10)
-}
-
-function DistributeTab({ tasks, people }) {
+function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
   const [weekNumber, setWeekNumber] = useState(1)
-  const [effectiveFrom, setEffectiveFrom] = useState(nextMonday)
   const [preview, setPreview] = useState(null)
   const [loading, setLoading] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -739,7 +738,7 @@ function DistributeTab({ tasks, people }) {
     setConfirmed(null)
     setOverrides({})
     try {
-      const data = await api.previewDistribution(weekNumber)
+      const data = await api.previewDistribution(weekNumber, effectiveFrom)
       setPreview(data)
     } catch (e) {
       setError(e.message)

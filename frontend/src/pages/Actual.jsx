@@ -242,11 +242,11 @@ export default function Actual() {
   const taskColorMap = Object.fromEntries(tasks.map((t) => [t.id, t.color]))
 
   useEffect(() => {
-    Promise.all([api.getPeople(), api.getTasks()]).then(([p, t]) => {
+    Promise.all([api.getPeople(selectedWeek), api.getTasks()]).then(([p, t]) => {
       setPeople(p.filter((x) => x.active).sort((a, b) => a.name.localeCompare(b.name)))
       setTasks(t)
     })
-  }, [])
+  }, [selectedWeek])
 
   const reload = useCallback(() => {
     setLoading(true)

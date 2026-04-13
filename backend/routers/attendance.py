@@ -8,6 +8,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from database import supabase
+from utils.versioned import active_schedule_rows
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
@@ -138,7 +139,10 @@ def get_deskbird_attendance(
         supabase.table("people").select("id, name").eq("active", True).order("name").execute().data
     )
     schedule_rows = (
-        supabase.table("person_schedule").select("person_id, day_of_week, hours, location").execute().data
+        supabase.table("person_schedule")
+        .select("person_id, day_of_week, hours, location, valid_from, valid_until")
+        .execute()
+        .data
     )
     absence_rows = (
         supabase.table("absences")
@@ -155,13 +159,6 @@ def get_deskbird_attendance(
         for first_name, names in group_people_by_first_name(people_rows).items()
         if first_name and len(names) > 1
     }
-    schedule_by_person = defaultdict(dict)
-    for row in schedule_rows:
-        schedule_by_person[row["person_id"]][row["day_of_week"]] = {
-            "hours": float(row.get("hours") or 0),
-            "location": (row.get("location") or "office").lower(),
-        }
-
     absent_by_date = defaultdict(set)
     for row in absence_rows:
         absent_by_date[row["date"]].add(row["person_id"])
@@ -184,8 +181,15 @@ def get_deskbird_attendance(
         expected = []
         missing = []
         expected_first = set()
+        active_schedule_rows_for_day = active_schedule_rows(schedule_rows, day_str)
+        by_person = defaultdict(dict)
+        for row in active_schedule_rows_for_day:
+            by_person[row["person_id"]][row["day_of_week"]] = {
+                "hours": float(row.get("hours") or 0),
+                "location": (row.get("location") or "office").lower(),
+            }
         for person_id, person_name in people_by_id.items():
-            sched = schedule_by_person.get(person_id, {}).get(dow)
+            sched = by_person.get(person_id, {}).get(dow)
             if not sched or sched["hours"] <= 0 or sched["location"] != "office":
                 continue
             if person_id in absent_by_date[day_str]:

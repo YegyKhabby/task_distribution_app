@@ -4,6 +4,7 @@ from models import DistributeRequest
 from collections import defaultdict
 from datetime import date, timedelta
 from utils.versioned import active_schedule_rows, next_monday
+from typing import Optional
 
 router = APIRouter(prefix="/distribute", tags=["distribute"])
 
@@ -325,8 +326,8 @@ def compute_preview(week_number: int, week_start_date: date = None):
 
 
 @router.get("/preview")
-def preview_distribution(week_number: int = 1):
-    return compute_preview(week_number, next_monday(date.today()))
+def preview_distribution(week_number: int = 1, week_start: Optional[date] = None):
+    return compute_preview(week_number, week_start or next_monday(date.today()))
 
 
 @router.post("/confirm")

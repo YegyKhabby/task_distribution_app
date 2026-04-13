@@ -1,16 +1,26 @@
+from datetime import date
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException
+
 from database import supabase
 from models import PersonCreate, PersonUpdate
+from utils.versioned import active_schedule_rows
 
 router = APIRouter(prefix="/people", tags=["people"])
 
 
 @router.get("")
-def list_people():
-    res = supabase.table("people").select("*, person_schedule(day_of_week, hours)").order("name").execute()
-    # Attach computed weekly_hours to each person
+def list_people(on_date: Optional[date] = None):
+    effective_date = str(on_date or date.today())
+    res = supabase.table("people").select(
+        "*, person_schedule(person_id, day_of_week, hours, location, valid_from, valid_until)"
+    ).order("name").execute()
+    # Only expose the schedule version active today; historical/future rows belong on /schedule.
     for p in res.data:
-        p["weekly_hours"] = sum(s["hours"] for s in (p.get("person_schedule") or []))
+        active_rows = active_schedule_rows(p.get("person_schedule") or [], effective_date)
+        p["person_schedule"] = active_rows
+        p["weekly_hours"] = sum(s["hours"] for s in active_rows)
     return res.data
 
 

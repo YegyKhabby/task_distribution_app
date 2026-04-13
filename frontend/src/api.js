@@ -30,12 +30,22 @@ function invalidate(...keys) {
   keys.forEach(k => delete _cache[k])
 }
 
+function invalidatePrefix(prefix) {
+  Object.keys(_cache).forEach((k) => {
+    if (k === prefix || k.startsWith(`${prefix}:`)) delete _cache[k]
+  })
+}
+
 export const api = {
   // People
-  getPeople: () => cached('people', () => req('GET', '/people')),
-  createPerson: (data) => req('POST', '/people', data).then(r => { invalidate('people', 'schedules'); return r }),
-  updatePerson: (id, data) => req('PUT', `/people/${id}`, data).then(r => { invalidate('people'); return r }),
-  deletePerson: (id) => req('DELETE', `/people/${id}`).then(r => { invalidate('people', 'schedules'); return r }),
+  getPeople: (onDate) => (
+    onDate
+      ? req('GET', `/people?on_date=${onDate}`)
+      : cached('people', () => req('GET', '/people'))
+  ),
+  createPerson: (data) => req('POST', '/people', data).then(r => { invalidatePrefix('people'); invalidate('schedules'); return r }),
+  updatePerson: (id, data) => req('PUT', `/people/${id}`, data).then(r => { invalidatePrefix('people'); return r }),
+  deletePerson: (id) => req('DELETE', `/people/${id}`).then(r => { invalidatePrefix('people'); invalidate('schedules'); return r }),
 
   // Schedule
   getAllSchedules: () => cached('schedules', () => req('GET', '/schedule')),
@@ -65,7 +75,7 @@ export const api = {
   setFixedHours: (data) => req('PUT', '/assignments/fixed', data).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
 
   // Distribution (auto)
-  previewDistribution: (weekNumber) => req('GET', `/distribute/preview?week_number=${weekNumber}`),
+  previewDistribution: (weekNumber, weekStart) => req('GET', `/distribute/preview?week_number=${weekNumber}${weekStart ? `&week_start=${weekStart}` : ''}`),
   confirmDistribution: (weekNumber, effectiveFrom, overrides) => req('POST', '/distribute/confirm', {
     week_number: weekNumber,
     effective_from: effectiveFrom,  // ISO date string e.g. "2026-04-07"
@@ -73,7 +83,12 @@ export const api = {
   }).then(r => { localStorage.removeItem('dist_stale'); return r }),
 
   // Distribution (saved matrix — for Matrix page)
-  getDistribution: (weekNumber) => req('GET', `/distribution${weekNumber != null ? `?week_number=${weekNumber}` : ''}`),
+  getDistribution: (weekNumber, weekStart) => {
+    const parts = []
+    if (weekNumber != null) parts.push(`week_number=${weekNumber}`)
+    if (weekStart) parts.push(`week_start=${weekStart}`)
+    return req('GET', `/distribution${parts.length ? `?${parts.join('&')}` : ''}`)
+  },
 
   // Preferred day pin (per week)
   setPreferredDays: (taskId, personId, weekNumber, days) => req('PUT', '/distribution/preferred-day', { task_id: taskId, person_id: personId, week_number: weekNumber, preferred_days: days }),

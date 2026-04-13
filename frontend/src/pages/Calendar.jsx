@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+import { formatLocalDate } from '../utils/dates'
 
 const DAY_ABBR = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
@@ -313,12 +314,12 @@ export default function Calendar() {
   const [distStale, setDistStale] = useState(() => localStorage.getItem('dist_stale') === 'true')
 
   useEffect(() => {
-    api.getPeople().then(all => {
+    api.getPeople(formatLocalDate(new Date(year, month - 1, 1))).then(all => {
       const active = all.filter(p => p.active !== false)
       setPeople(active)
       if (active.length > 0) setPersonId(active[0].id)
     }).catch(() => {})
-  }, [])
+  }, [year, month])
 
   useEffect(() => {
     setWeekStart(parseInt(localStorage.getItem(`week_start_${year}_${month}`) || '1', 10))

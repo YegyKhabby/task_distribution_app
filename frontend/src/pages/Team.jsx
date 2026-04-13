@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
 import ConfirmDialog from '../components/ConfirmDialog'
+import { formatLocalDate } from '../utils/dates'
 
 const SCHED_DAYS = [
   { num: 1, label: 'Mon' },
@@ -11,8 +12,8 @@ const SCHED_DAYS = [
   { num: 5, label: 'Fri' },
 ]
 
-function exportTeamExcel(people, allSchedules) {
-  const today = new Date().toISOString().slice(0, 10)
+function exportTeamExcel(people, allSchedules, asOfDate) {
+  const today = asOfDate
   const active = people.filter(p => p.active)
   const scheduleMap = {}
   for (const p of active) {
@@ -132,22 +133,29 @@ const DAYS = [
   { num: 5, label: 'Fri' },
 ]
 
-/** From all versioned rows for one person, pick the active version per day for a given date. */
+/** Pick the latest active schedule version for a date; missing days stay empty. */
 function activeSchedForDate(rows, dateStr) {
-  const byDay = {}
-  // rows are sorted valid_from ASC; iterate and overwrite to get latest ≤ dateStr
-  for (const r of rows) {
+  const activeRows = rows.filter((r) => {
     const vf = r.valid_from || '2000-01-01'
     const vu = r.valid_until
-    if (vf <= dateStr && (vu == null || vu >= dateStr)) {
-      byDay[r.day_of_week] = r
-    }
-  }
-  return byDay
+    return vf <= dateStr && (vu == null || vu >= dateStr)
+  })
+  if (activeRows.length === 0) return {}
+
+  const latestVersion = activeRows.reduce((latest, row) => {
+    const vf = row.valid_from || '2000-01-01'
+    return vf > latest ? vf : latest
+  }, '2000-01-01')
+
+  return Object.fromEntries(
+    activeRows
+      .filter((r) => (r.valid_from || '2000-01-01') === latestVersion)
+      .map((r) => [r.day_of_week, r])
+  )
 }
 
-function WeeklyTable({ people, allSchedules }) {
-  const today = new Date().toISOString().slice(0, 10)
+function WeeklyTable({ people, allSchedules, asOfDate }) {
+  const today = asOfDate
   const active = people.filter(p => p.active)
   if (active.length === 0) return null
 
@@ -223,6 +231,7 @@ function WeeklyTable({ people, allSchedules }) {
 export default function Team() {
   const [people, setPeople] = useState([])
   const [allSchedules, setAllSchedules] = useState([])
+  const [asOfDate, setAsOfDate] = useState(() => formatLocalDate(new Date()))
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(null)
   const [name, setName] = useState('')
@@ -231,13 +240,13 @@ export default function Team() {
 
   const load = async () => {
     setLoading(true)
-    const [all, scheds] = await Promise.all([api.getPeople(), api.getAllSchedules()])
+    const [all, scheds] = await Promise.all([api.getPeople(asOfDate), api.getAllSchedules()])
     setPeople(all)
     setAllSchedules(scheds)
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [asOfDate])
 
   const startEdit = (p) => { setEditing(p.id); setName(p.name); setError('') }
 
@@ -266,18 +275,24 @@ export default function Team() {
       <div className="flex items-center mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Team</h1>
         <button
-          onClick={() => exportTeamExcel(people, allSchedules)}
+          onClick={() => exportTeamExcel(people, allSchedules, asOfDate)}
           className="ml-auto text-sm text-gray-600 border border-gray-200 px-3 py-1 rounded-lg hover:bg-gray-50"
         >
           Download Excel
         </button>
+        <input
+          type="date"
+          value={asOfDate}
+          onChange={(e) => setAsOfDate(e.target.value)}
+          className="border border-gray-300 rounded-md px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+        />
       </div>
 
       {loading ? (
         <p className="text-gray-500">Loading…</p>
       ) : (
         <>
-          <WeeklyTable people={people} allSchedules={allSchedules} />
+          <WeeklyTable people={people} allSchedules={allSchedules} asOfDate={asOfDate} />
 
           <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
             {people.map((p) => (

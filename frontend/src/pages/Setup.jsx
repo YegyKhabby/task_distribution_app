@@ -75,9 +75,32 @@ function scheduleFromRows(rows) {
   const s = emptySchedule()
   for (const r of rows) {
     const d = s.find((x) => x.day === r.day_of_week)
-    if (d) { d.checked = true; d.hours = r.hours; d.location = r.location || 'office' }
+    if (d) {
+      d.checked = r.hours > 0
+      d.hours = r.hours > 0 ? r.hours : (d.hours || 4)
+      d.location = r.location || 'office'
+    }
   }
   return s
+}
+
+// Pick the latest active schedule version; missing days stay off.
+function activeScheduleFromRows(rows, today) {
+  const activeRows = rows.filter((r) => {
+    const vf = r.valid_from || '2000-01-01'
+    const vu = r.valid_until
+    return vf <= today && (vu == null || vu >= today)
+  })
+  if (activeRows.length === 0) return emptySchedule()
+
+  const latestVersion = activeRows.reduce((latest, row) => {
+    const vf = row.valid_from || '2000-01-01'
+    return vf > latest ? vf : latest
+  }, '2000-01-01')
+
+  return scheduleFromRows(
+    activeRows.filter((r) => (r.valid_from || '2000-01-01') === latestVersion)
+  )
 }
 
 function nextMonday() {
@@ -192,12 +215,10 @@ export default function Setup() {
     const rows = await api.getSchedule(id)
 
     // Split into base (valid_from <= today) and future (valid_from > today)
-    const baseRows = rows.filter(r => r.valid_from <= today)
     const futureRows = rows.filter(r => r.valid_from > today)
 
-    // Base: use rows with valid_from = '2000-01-01' (permanent baseline)
-    const permanentRows = baseRows.filter(r => r.valid_from === '2000-01-01')
-    setSchedule(scheduleFromRows(permanentRows.length > 0 ? permanentRows : baseRows))
+    // Current: per-day, pick the latest valid_from <= today (true active schedule)
+    setSchedule(activeScheduleFromRows(rows, today))
 
     // Future: group by valid_from, pick the earliest future date
     if (futureRows.length > 0) {
@@ -233,8 +254,7 @@ export default function Setup() {
     setError('')
     try {
       const entries = schedule
-        .filter(d => d.checked && d.hours > 0)
-        .map(d => ({ day_of_week: d.day, hours: Number(d.hours), location: d.location, valid_from: '2000-01-01' }))
+        .map(d => ({ day_of_week: d.day, hours: d.checked ? Number(d.hours) : 0, location: d.location, valid_from: '2000-01-01' }))
       await api.saveSchedule(selectedId, entries)
       setSaved(true)
     } catch (e) {
@@ -269,9 +289,8 @@ export default function Setup() {
     setErrorFuture('')
     try {
       const entries = futureForm.schedule
-        .filter(d => d.checked && d.hours > 0)
-        .map(d => ({ day_of_week: d.day, hours: Number(d.hours), location: d.location, valid_from: futureForm.validFrom }))
-      if (entries.length === 0) { setErrorFuture('Set at least one working day'); setSavingFuture(false); return }
+        .map(d => ({ day_of_week: d.day, hours: d.checked ? Number(d.hours) : 0, location: d.location, valid_from: futureForm.validFrom }))
+      if (entries.every(e => e.hours === 0)) { setErrorFuture('Set at least one working day'); setSavingFuture(false); return }
       await api.saveSchedule(selectedId, entries)
       setSavedFuture(true)
       setFutureVersion({ validFrom: futureForm.validFrom, rows: entries.map(e => ({ ...e, day_of_week: e.day_of_week })) })
@@ -442,7 +461,7 @@ export default function Setup() {
                     {DAYS
                       .map(d => {
                         const row = futureVersion.rows.find(r => r.day_of_week === d.num)
-                        return row ? `${d.label.slice(0,3)} ${row.hours}h` : null
+                        return row && row.hours > 0 ? `${d.label.slice(0,3)} ${row.hours}h` : null
                       })
                       .filter(Boolean)
                       .join('  ·  ')}

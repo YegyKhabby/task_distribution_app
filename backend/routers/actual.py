@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from io import BytesIO
 from models import ActualHoursCreate, ActualHoursUpdate, CopyWeekRequest, ActualLocationUpsert
 from routers.calendar import _compute_day_view
+from utils.versioned import active_schedule_rows
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -93,7 +94,13 @@ def get_actual_location(week_start: str = Query(...)):
     override_map = {(r["person_id"], r["date"]): r["location"] for r in overrides}
 
     # Schedule defaults (location per person per day_of_week)
-    sched_rows = supabase.table("person_schedule").select("person_id, day_of_week, location").execute().data
+    sched_rows = (
+        supabase.table("person_schedule")
+        .select("person_id, day_of_week, location, valid_from, valid_until")
+        .execute()
+        .data
+    )
+    sched_rows = active_schedule_rows(sched_rows, str(monday))
     sched_map = {}  # person_id -> {day_of_week: location}
     for r in sched_rows:
         sched_map.setdefault(r["person_id"], {})[r["day_of_week"]] = r.get("location") or "office"

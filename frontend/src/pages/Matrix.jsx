@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
+import { nextMondayDateString } from '../utils/dates'
 
 function exportMatrixExcel(people, tasks, distMap, weekNumber) {
   const activeTasks = tasks.filter(t => people.some(p => (distMap[p.id] || {})[t.id] > 0))
@@ -59,6 +60,7 @@ function exportMatrixExcel(people, tasks, distMap, weekNumber) {
 
 export default function Matrix() {
   const [weekNumber, setWeekNumber] = useState(1)
+  const [weekStartDate, setWeekStartDate] = useState(nextMondayDateString)
   const [view, setView] = useState('cards') // 'cards' | 'grid'
   const [dist, setDist] = useState([])
   const [people, setPeople] = useState([])
@@ -67,21 +69,21 @@ export default function Matrix() {
 
   useEffect(() => {
     Promise.all([
-      api.getPeople(),
+      api.getPeople(weekStartDate),
       api.getTasks(),
     ]).then(([p, t]) => {
       setPeople(p.filter((x) => x.active))
       setTasks(t)
     })
-  }, [])
+  }, [weekStartDate])
 
   useEffect(() => {
     setLoading(true)
-    api.getDistribution(weekNumber).then((d) => {
+    api.getDistribution(weekNumber, weekStartDate).then((d) => {
       setDist(d)
       setLoading(false)
     })
-  }, [weekNumber])
+  }, [weekNumber, weekStartDate])
 
   // Build lookup: person_id -> task_id -> hours
   const distMap = {}
@@ -119,6 +121,15 @@ export default function Matrix() {
         >
           Download Excel
         </button>
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-500">Week of</span>
+          <input
+            type="date"
+            value={weekStartDate}
+            onChange={(e) => setWeekStartDate(e.target.value)}
+            className="border border-gray-300 rounded-md px-3 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          />
+        </div>
         <div className="flex gap-1">
           {[['cards', 'By Person'], ['task', 'By Task'], ['grid', 'Grid']].map(([v, label]) => (
             <button

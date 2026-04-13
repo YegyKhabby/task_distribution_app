@@ -18,15 +18,22 @@ def _latest_by(rows, key_fn, sort_key="valid_from"):
 def active_schedule_rows(rows, week_start_str: str) -> list:
     """
     From a list of person_schedule rows (with valid_from, valid_until),
-    return one row per (person_id, day_of_week) — the most recent version
-    that is active for the given week_start date.
+    return the rows belonging to the latest version active for week_start_str.
+
+    A "version" is all rows sharing the same valid_from date.  The latest
+    version whose valid_from <= week_start_str wins completely — days not
+    present in that version are treated as 0h (no fallback to older versions).
     """
     filtered = [
         r for r in rows
         if (r.get("valid_from") or "2000-01-01") <= week_start_str
         and (r.get("valid_until") is None or r["valid_until"] >= week_start_str)
     ]
-    return _latest_by(filtered, lambda r: (r.get("person_id", ""), r["day_of_week"]))
+    if not filtered:
+        return []
+    latest_version = max(r.get("valid_from") or "2000-01-01" for r in filtered)
+    version_rows = [r for r in filtered if (r.get("valid_from") or "2000-01-01") == latest_version]
+    return _latest_by(version_rows, lambda r: (r.get("person_id", ""), r["day_of_week"]))
 
 
 def active_distribution_rows(rows, week_start_str: str) -> list:
