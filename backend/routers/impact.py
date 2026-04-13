@@ -42,7 +42,7 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
 
     # 1. Find absences for that week
     absences_res = supabase.table("absences").select(
-        "*, people(id, name, weekly_hours)"
+        "*, people(id, name)"
     ).gte("date", str(week_start)).lte("date", str(week_end)).execute()
 
     absences = absences_res.data
@@ -84,9 +84,24 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
 
     # 2. Get task distributions for all people for this week number — active version
     dist_res = supabase.table("task_distribution").select(
-        "*, people(id, name, weekly_hours), tasks(id, name, color, priority, schedule_rule, is_fill)"
+        "*, people(id, name), tasks(id, name, color, priority, schedule_rule, is_fill)"
     ).eq("week_number", week_number).execute()
     dist_all = active_distribution_rows(dist_res.data, week_start_str)
+
+    # Compute weekly hours from person_schedule (not the stale people.weekly_hours column)
+    all_pids = list({d["person_id"] for d in dist_all})
+    if all_pids:
+        sched_rows_bulk = supabase.table("person_schedule").select(
+            "person_id, day_of_week, hours, valid_from, valid_until"
+        ).in_("person_id", all_pids).execute().data
+    else:
+        sched_rows_bulk = []
+
+    weekly_hours_map: dict[str, float] = {}
+    for pid in all_pids:
+        rows = [r for r in sched_rows_bulk if r["person_id"] == pid]
+        active = active_schedule_rows(rows, week_start_str)
+        weekly_hours_map[pid] = sum(r["hours"] for r in active)
 
     # Index: person_id -> list of {task_id, task_name, hours_per_week}
     person_tasks: dict[str, list] = defaultdict(list)
@@ -108,7 +123,7 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
         task_people[tid].append({
             "person_id": pid,
             "name": d["people"]["name"],
-            "weekly_hours": d["people"]["weekly_hours"],
+            "weekly_hours": weekly_hours_map.get(d["person_id"], 0.0),
             "hours_on_task": d["hours_per_week"],
         })
 
@@ -117,7 +132,7 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
     for pid, tasks_list in person_tasks.items():
         dist_entry = next((d for d in dist_all if d["person_id"] == pid), None)
         if dist_entry:
-            weekly = dist_entry["people"]["weekly_hours"]
+            weekly = weekly_hours_map.get(pid, 0.0)
             total_task_hrs = sum(t["hours_per_week"] for t in tasks_list)
             spare_hours[pid] = max(0.0, weekly - total_task_hrs)
 
@@ -213,7 +228,7 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
         result.append({
             "person_id": pid,
             "person_name": person["name"],
-            "weekly_hours": person["weekly_hours"],
+            "weekly_hours": weekly_hours_map.get(pid, 0.0),
             "absent_days": absent_days,
             "absent_dates": info["absent_dates"],
             "unallocated_tasks": unallocated_tasks,
