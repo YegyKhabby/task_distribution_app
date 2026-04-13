@@ -17,15 +17,15 @@ sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
 
 # ── People ─────────────────────────────────────────────────────────────────
 PEOPLE = [
-    {"name": "Andrian",  "weekly_hours": 16},
-    {"name": "Anisha",   "weekly_hours": 20},
-    {"name": "Ayesha",   "weekly_hours": 20},
-    {"name": "Can",      "weekly_hours": 20},
-    {"name": "Maira",    "weekly_hours": 20},
-    {"name": "Moinul",   "weekly_hours": 20},
-    {"name": "Rohit",    "weekly_hours": 20},
-    {"name": "Sidrit",   "weekly_hours": 20},
-    {"name": "Yeganeh",  "weekly_hours": 20},
+    {"name": "Andrian"},
+    {"name": "Anisha"},
+    {"name": "Ayesha"},
+    {"name": "Can"},
+    {"name": "Maira"},
+    {"name": "Moinul"},
+    {"name": "Rohit"},
+    {"name": "Sidrit"},
+    {"name": "Yeganeh"},
 ]
 
 # ── Tasks (in priority order) ───────────────────────────────────────────────
@@ -110,7 +110,7 @@ def seed():
     print("Seeding people...")
     sb.table("people").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
     people_res = sb.table("people").insert(
-        [{"name": p["name"], "weekly_hours": p["weekly_hours"]} for p in PEOPLE]
+        [{"name": p["name"]} for p in PEOPLE]
     ).execute()
     people_map = {p["name"]: p["id"] for p in people_res.data}
     print(f"  Inserted {len(people_res.data)} people")
