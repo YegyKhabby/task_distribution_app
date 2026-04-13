@@ -181,9 +181,14 @@ def get_deskbird_attendance(
         expected = []
         missing = []
         expected_first = set()
-        active_schedule_rows_for_day = active_schedule_rows(schedule_rows, day_str)
+        _sched_by_pid: dict = defaultdict(list)
+        for r in schedule_rows:
+            _sched_by_pid[r["person_id"]].append(r)
+        active_for_day = []
+        for _pid_rows in _sched_by_pid.values():
+            active_for_day.extend(active_schedule_rows(_pid_rows, day_str))
         by_person = defaultdict(dict)
-        for row in active_schedule_rows_for_day:
+        for row in active_for_day:
             by_person[row["person_id"]][row["day_of_week"]] = {
                 "hours": float(row.get("hours") or 0),
                 "location": (row.get("location") or "office").lower(),

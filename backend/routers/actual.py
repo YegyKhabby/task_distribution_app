@@ -1,3 +1,4 @@
+from collections import defaultdict
 from fastapi import APIRouter, Query
 from fastapi.responses import Response, StreamingResponse
 from database import supabase
@@ -100,7 +101,12 @@ def get_actual_location(week_start: str = Query(...)):
         .execute()
         .data
     )
-    sched_rows = active_schedule_rows(sched_rows, str(monday))
+    _sched_by_pid: dict = defaultdict(list)
+    for r in sched_rows:
+        _sched_by_pid[r["person_id"]].append(r)
+    sched_rows = []
+    for _pid_rows in _sched_by_pid.values():
+        sched_rows.extend(active_schedule_rows(_pid_rows, str(monday)))
     sched_map = {}  # person_id -> {day_of_week: location}
     for r in sched_rows:
         sched_map.setdefault(r["person_id"], {})[r["day_of_week"]] = r.get("location") or "office"

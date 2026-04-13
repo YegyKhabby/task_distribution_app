@@ -149,7 +149,7 @@ function activeSchedForDate(rows, dateStr) {
 
   return Object.fromEntries(
     activeRows
-      .filter((r) => (r.valid_from || '2000-01-01') === latestVersion)
+      .filter((r) => (r.valid_from || '2000-01-01') === latestVersion && r.hours > 0)
       .map((r) => [r.day_of_week, r])
   )
 }

@@ -183,6 +183,7 @@ export default function Setup() {
   const [people, setPeople] = useState([])
   const [selectedId, setSelectedId] = useState('')
   const [schedule, setSchedule] = useState(emptySchedule())
+  const [activeVersionDate, setActiveVersionDate] = useState('2000-01-01')
   const [loadingSchedule, setLoadingSchedule] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -214,11 +215,18 @@ export default function Setup() {
     setLoadingSchedule(true)
     const rows = await api.getSchedule(id)
 
-    // Split into base (valid_from <= today) and future (valid_from > today)
-    const futureRows = rows.filter(r => r.valid_from > today)
+    // Split: future = valid_from >= today (includes today so it stays visible as "upcoming")
+    const futureRows = rows.filter(r => r.valid_from >= today)
+    const baseRows = rows.filter(r => r.valid_from < today)
 
-    // Current: per-day, pick the latest valid_from <= today (true active schedule)
-    setSchedule(activeScheduleFromRows(rows, today))
+    // Determine the active version date (latest valid_from < today, or 2000-01-01 fallback)
+    const latestBase = baseRows.length > 0
+      ? baseRows.reduce((a, b) => a.valid_from > b.valid_from ? a : b).valid_from
+      : '2000-01-01'
+    setActiveVersionDate(latestBase)
+
+    // Editor always shows the currently active version
+    setSchedule(activeScheduleFromRows(rows, today === latestBase ? today : latestBase))
 
     // Future: group by valid_from, pick the earliest future date
     if (futureRows.length > 0) {
@@ -253,8 +261,10 @@ export default function Setup() {
     setSaving(true)
     setError('')
     try {
-      const entries = schedule
-        .map(d => ({ day_of_week: d.day, hours: d.checked ? Number(d.hours) : 0, location: d.location, valid_from: '2000-01-01' }))
+      const isBaseline = activeVersionDate === '2000-01-01'
+      const entries = isBaseline
+        ? schedule.filter(d => d.checked && d.hours > 0).map(d => ({ day_of_week: d.day, hours: Number(d.hours), location: d.location, valid_from: activeVersionDate }))
+        : schedule.map(d => ({ day_of_week: d.day, hours: d.checked ? Number(d.hours) : 0, location: d.location, valid_from: activeVersionDate }))
       await api.saveSchedule(selectedId, entries)
       setSaved(true)
     } catch (e) {

@@ -254,7 +254,12 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
 
     monday_str = str(monday)
     bulk_sched_raw = supabase.table("person_schedule").select("person_id, day_of_week, hours, location, valid_from, valid_until").execute().data
-    bulk_sched = active_schedule_rows(bulk_sched_raw, monday_str)
+    _sched_by_pid: dict = defaultdict(list)
+    for r in bulk_sched_raw:
+        _sched_by_pid[r["person_id"]].append(r)
+    bulk_sched = []
+    for _pid_rows in _sched_by_pid.values():
+        bulk_sched.extend(active_schedule_rows(_pid_rows, monday_str))
     bulk_dist_raw  = supabase.table("task_distribution").select(
         "person_id, task_id, hours_per_week, preferred_days, valid_from, tasks(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
     ).eq("week_number", wn).execute().data
