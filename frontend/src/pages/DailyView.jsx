@@ -246,6 +246,14 @@ export default function DailyView() {
 
       {!loading && !error && data && (
         <>
+          {data.warnings?.length > 0 && (
+            <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <p className="text-sm font-semibold text-amber-800 mb-1">Warnings</p>
+              {data.warnings.map((warning, i) => (
+                <p key={i} className="text-sm text-amber-700">{warning}</p>
+              ))}
+            </div>
+          )}
           {data.tasks.length === 0 ? (
             <div className="text-center text-gray-400 py-16 text-sm">No tasks scheduled for this day.</div>
           ) : (

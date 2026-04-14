@@ -282,7 +282,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
 
   const save = async () => {
     if (!form.name.trim()) { setFormError('Name required'); return }
-    if (!form.is_fill && (!form.weekly_hours_target || Number(form.weekly_hours_target) < 0)) { setFormError('Hours required (or check Fill spare hours)'); return }
+    if (!form.is_fill && (form.weekly_hours_target === '' || Number(form.weekly_hours_target) < 0)) { setFormError('Hours must be 0 or more'); return }
     const globalData = {
       name: form.name.trim(),
       color: form.color,

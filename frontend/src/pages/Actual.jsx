@@ -94,19 +94,21 @@ function EditableCell({ entryId, hours, personId, taskId, taskLabel, dateStr, ta
     if (entryId) {
       if (num === 0) {
         await api.deleteActual(entryId)
+        onSave({ type: 'delete', entryId })
       } else if (num !== hours) {
-        await api.updateActual(entryId, { hours: num })
+        const updated = await api.updateActual(entryId, { hours: num })
+        onSave({ type: 'update', entry: updated })
       } else {
         return
       }
     } else {
       if (num > 0) {
-        await api.createActual({ person_id: personId, task_id: taskId, task_label: taskLabel, date: dateStr, hours: num })
+        const created = await api.createActual({ person_id: personId, task_id: taskId, task_label: taskLabel, date: dateStr, hours: num })
+        onSave({ type: 'create', entry: created })
       } else {
         return
       }
     }
-    onSave()
   }
 
   const lightBg = hours > 0 && taskColor ? lightenHex(taskColor, 0.88) : null
@@ -259,6 +261,21 @@ export default function Actual() {
       setLoading(false)
     })
   }, [selectedWeek])
+
+  const applyEntryChange = useCallback((change) => {
+    if (!change) return
+    if (change.type === 'create' && change.entry) {
+      setEntries((prev) => [...prev, change.entry])
+      return
+    }
+    if (change.type === 'update' && change.entry) {
+      setEntries((prev) => prev.map((e) => (e.id === change.entry.id ? { ...e, ...change.entry } : e)))
+      return
+    }
+    if (change.type === 'delete' && change.entryId) {
+      setEntries((prev) => prev.filter((e) => e.id !== change.entryId))
+    }
+  }, [])
 
   useEffect(() => {
     setCopyState('idle')
@@ -482,7 +499,7 @@ export default function Actual() {
                                   taskLabel={tk.task_label}
                                   dateStr={d}
                                   taskColor={tcolor}
-                                  onSave={reload}
+                                  onSave={applyEntryChange}
                                 />
                               </td>
                             )

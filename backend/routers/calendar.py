@@ -66,7 +66,7 @@ def distribute_week(
         return sorted(work_dows, key=lambda d: day_capacity[d], reverse=True)[:n]
 
     def alloc(dow: int, task_id: str, hours: float):
-        hours = round_half(hours)
+        hours = min(round_half(hours), round_half(day_capacity[dow]))
         if hours <= 0:
             return
         allocations[dow][task_id] = allocations[dow].get(task_id, 0.0) + hours
@@ -78,6 +78,7 @@ def distribute_week(
     for t in normal_tasks:
         tid = t["task_id"]
         hrs = t["hours_per_week"]
+        requested_hours = round_half(hrs)
         if hrs <= 0:
             continue
 
@@ -96,6 +97,11 @@ def distribute_week(
                         share = round_half(hrs / len(valid))
                         alloc(dow, tid, share)
                         rem = round_half(rem - share)
+                allocated_total = round_half(sum(allocations[d].get(tid, 0.0) for d in valid))
+                if allocated_total + 0.1 < requested_hours:
+                    warnings.append(
+                        f"{t['task_name']} ({person_name}): preferred day pin {valid} only fit {allocated_total}h of {requested_hours}h due to day capacity"
+                    )
             else:
                 best = top_by_capacity(1)
                 if best:
@@ -276,6 +282,7 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
     # Per-person allocations for the day
     # task_id -> {task_name, task_color, responsible_person, people: [{person_name, hours}]}
     task_data: dict[str, dict] = {}
+    warnings: list[str] = []
 
     for person in all_people:
         pid   = person["id"]
@@ -306,6 +313,7 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
                 preferred[row["task_id"]] = row["preferred_days"]
 
         alloc, _warnings = distribute_week(tasks_list, schedule, pname, preferred)
+        warnings.extend(_warnings)
 
         for tid, hrs in alloc.get(dow, {}).items():
             if hrs <= 0:
@@ -336,6 +344,7 @@ def _compute_day_view(date_obj: date, week_start: int = 1) -> dict:
         "tasks":        tasks_sorted,
         "absent_people": absent_names,
         "total_hours":  total_hours,
+        "warnings":     warnings,
     }
 
 
