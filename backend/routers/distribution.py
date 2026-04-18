@@ -16,10 +16,20 @@ def get_distribution(week_number: Optional[int] = None, week_start: Optional[dat
     if week_number is not None:
         q = q.eq("week_number", week_number)
     rows = q.execute().data
-    # Always filter to the active version per (person, task) — default to today
-    effective_date = week_start or date.today()
-    rows = active_distribution_rows(rows, str(effective_date))
-    return rows
+    effective_date = str(week_start or date.today())
+
+    if week_number is not None:
+        # Single week: apply versioning once
+        return active_distribution_rows(rows, effective_date)
+    else:
+        # All weeks: apply versioning independently per week_number so a newer
+        # confirm on week 2 doesn't wipe out week 1's active rows
+        result = []
+        weeks = {r.get("week_number") for r in rows}
+        for wn in weeks:
+            week_rows = [r for r in rows if r.get("week_number") == wn]
+            result.extend(active_distribution_rows(week_rows, effective_date))
+        return result
 
 
 @router.put("/preferred-day")
