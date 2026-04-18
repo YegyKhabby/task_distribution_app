@@ -56,7 +56,8 @@ export const api = {
 
   // Tasks
   getTasks: () => cached('tasks', () => req('GET', '/tasks')),
-  getTaskWeekSettings: (weekNumber) => req('GET', `/tasks/week-settings?week_number=${weekNumber}`),
+  getTaskWeekSettings: (weekNumber) => req('GET', `/tasks/week-settings${weekNumber != null ? `?week_number=${weekNumber}` : ''}`),
+  getAllTaskWeekSettings: () => req('GET', '/tasks/week-settings'),
   createTask: (data) => req('POST', '/tasks', data).then(r => { invalidate('tasks'); localStorage.setItem('dist_stale', 'true'); return r }),
   updateTask: (id, data) => req('PUT', `/tasks/${id}`, data).then(r => { invalidate('tasks'); localStorage.setItem('dist_stale', 'true'); return r }),
   updateTaskWeekSettings: (id, weekNumber, weeklyHoursTarget) => req('PUT', `/tasks/${id}/week-settings`, {

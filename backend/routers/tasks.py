@@ -12,9 +12,11 @@ def list_tasks():
 
 
 @router.get("/week-settings")
-def list_task_week_settings(week_number: int = Query(..., ge=1, le=4)):
-    res = supabase.table("task_week_settings").select("*").eq("week_number", week_number).execute()
-    return res.data
+def list_task_week_settings(week_number: int = Query(None, ge=1, le=4)):
+    q = supabase.table("task_week_settings").select("*")
+    if week_number is not None:
+        q = q.eq("week_number", week_number)
+    return q.execute().data
 
 
 @router.post("", status_code=201)

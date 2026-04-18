@@ -195,27 +195,61 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setThisWeekOnly(new Set()) // reset per-task scope toggles on week change
   }
 
-  // ── Load per-week distribution totals ──
+  // ── Load per-week distribution totals + under-distribution warnings ──
   useEffect(() => {
     if (!tasks.length) return
     const freshdeskFillIds = new Set(
       tasks.filter(t => t.is_fill && t.name.toLowerCase().includes('freshdesk')).map(t => t.id)
     )
-    api.getDistribution().then(rows => {
-      const weekTotal = {}, weekFreshdesk = {}
-      for (const row of rows) {
-        weekTotal[row.week_number] = (weekTotal[row.week_number] || 0) + row.hours_per_week
-        if (freshdeskFillIds.has(row.task_id)) {
-          weekFreshdesk[row.week_number] = (weekFreshdesk[row.week_number] || 0) + row.hours_per_week
-        }
+    const fillIds = new Set(tasks.filter(t => t.is_fill).map(t => t.id))
+    const taskMap = Object.fromEntries(tasks.map(t => [t.id, t]))
+
+    Promise.all([api.getDistribution(), api.getAllTaskWeekSettings()]).then(([rows, weekSettings]) => {
+      // Per-week target overrides: { task_id: { week_number: target } }
+      const weekTargetOverrides = {}
+      for (const s of weekSettings) {
+        if (!weekTargetOverrides[s.task_id]) weekTargetOverrides[s.task_id] = {}
+        weekTargetOverrides[s.task_id][s.week_number] = s.weekly_hours_target
       }
-      // Build per-week {total, excl} — round to 0.5
+
+      const weekTotal = {}, weekFreshdesk = {}
+      // task distributed hours per week: { week_number: { task_id: hours } }
+      const weekTaskDist = {}
+      for (const row of rows) {
+        const wn = row.week_number
+        weekTotal[wn] = (weekTotal[wn] || 0) + row.hours_per_week
+        if (freshdeskFillIds.has(row.task_id)) {
+          weekFreshdesk[wn] = (weekFreshdesk[wn] || 0) + row.hours_per_week
+        }
+        if (!weekTaskDist[wn]) weekTaskDist[wn] = {}
+        weekTaskDist[wn][row.task_id] = (weekTaskDist[wn][row.task_id] || 0) + row.hours_per_week
+      }
+
+      // Build per-week warnings: tasks where distributed < target by > 0.1h
+      const weekWarnings = {}
+      for (const wn of [1, 2, 3, 4]) {
+        const dist = weekTaskDist[wn] || {}
+        const warns = []
+        for (const t of tasks) {
+          if (fillIds.has(t.id)) continue // fill tasks have no fixed target
+          const target = weekTargetOverrides[t.id]?.[wn] ?? t.weekly_hours_target
+          if (!target || target <= 0) continue
+          const distributed = dist[t.id] || 0
+          if (target - distributed > 0.1) {
+            warns.push({ task_id: t.id, name: t.name, color: t.color, target, distributed: Math.round(distributed * 2) / 2 })
+          }
+        }
+        weekWarnings[wn] = warns
+      }
+
       const round = (v) => Math.round(v * 2) / 2
       const byWeek = {}
       for (const wn of [1, 2, 3, 4]) {
         const total = weekTotal[wn] ?? null
         const fd = weekFreshdesk[wn] || 0
-        byWeek[wn] = total != null ? { total: round(total), excl: round(total - fd) } : null
+        byWeek[wn] = total != null
+          ? { total: round(total), excl: round(total - fd), warnings: weekWarnings[wn] }
+          : { total: null, excl: null, warnings: weekWarnings[wn] }
       }
       setDistAvg(byWeek)
     }).catch(() => {})
@@ -363,31 +397,55 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     <div>
       {/* ── Hours summary bar — per week ── */}
       {weekHours && (
-        <div className="flex items-center gap-1 mb-4 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm overflow-x-auto">
-          <span className="text-indigo-700 font-medium shrink-0 mr-2">Total hrs:</span>
-          {[1, 2, 3, 4].map((wn) => {
-            const w = weekHours[wn]
-            const isActive = wn === weekNumber
-            return (
-              <div
-                key={wn}
-                onClick={() => switchWeek(wn)}
-                className={`flex flex-col items-center px-3 py-1 rounded-lg cursor-pointer transition-colors shrink-0 ${
-                  isActive ? 'bg-indigo-600 text-white' : 'bg-white border border-indigo-100 text-indigo-900 hover:bg-indigo-100'
-                }`}
-              >
-                <span className={`text-[10px] font-medium mb-0.5 ${isActive ? 'text-indigo-200' : 'text-indigo-400'}`}>W{wn}</span>
-                {w ? (
-                  <>
-                    <span className="font-semibold text-sm leading-tight">{w.total}h</span>
-                    <span className={`text-[10px] leading-tight ${isActive ? 'text-indigo-200' : 'text-indigo-400'}`}>{w.excl}h excl FD</span>
-                  </>
-                ) : (
-                  <span className="text-xs text-gray-400">—</span>
-                )}
+        <div className="mb-4">
+          <div className="flex items-center gap-1 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm overflow-x-auto">
+            <span className="text-indigo-700 font-medium shrink-0 mr-2">Total hrs:</span>
+            {[1, 2, 3, 4].map((wn) => {
+              const w = weekHours[wn]
+              const isActive = wn === weekNumber
+              const warnCount = w?.warnings?.length || 0
+              return (
+                <div
+                  key={wn}
+                  onClick={() => switchWeek(wn)}
+                  className={`relative flex flex-col items-center px-3 py-1 rounded-lg cursor-pointer transition-colors shrink-0 ${
+                    isActive ? 'bg-indigo-600 text-white' : 'bg-white border border-indigo-100 text-indigo-900 hover:bg-indigo-100'
+                  }`}
+                >
+                  {warnCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 bg-amber-400 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center shadow-sm">
+                      {warnCount}
+                    </span>
+                  )}
+                  <span className={`text-[10px] font-medium mb-0.5 ${isActive ? 'text-indigo-200' : 'text-indigo-400'}`}>W{wn}</span>
+                  {w?.total != null ? (
+                    <>
+                      <span className="font-semibold text-sm leading-tight">{w.total}h</span>
+                      <span className={`text-[10px] leading-tight ${isActive ? 'text-indigo-200' : 'text-indigo-400'}`}>{w.excl}h excl FD</span>
+                    </>
+                  ) : (
+                    <span className={`text-xs ${isActive ? 'text-indigo-300' : 'text-gray-400'}`}>not confirmed</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Warnings for the active week */}
+          {weekHours[weekNumber]?.warnings?.length > 0 && (
+            <div className="mt-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+              <p className="text-xs font-semibold text-amber-700 mb-1.5">Under-distributed in Week {weekNumber}:</p>
+              <div className="flex flex-wrap gap-2">
+                {weekHours[weekNumber].warnings.map(w => (
+                  <span key={w.task_id} className="flex items-center gap-1.5 text-xs bg-white border border-amber-200 rounded-lg px-2 py-1">
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: w.color || '#6366f1' }} />
+                    <span className="font-medium text-gray-800">{w.name}</span>
+                    <span className="text-amber-600">{w.distributed}h / {w.target}h</span>
+                  </span>
+                ))}
               </div>
-            )
-          })}
+            </div>
+          )}
         </div>
       )}
 
