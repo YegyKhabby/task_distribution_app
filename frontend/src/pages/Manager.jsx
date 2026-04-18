@@ -319,6 +319,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   const save = async () => {
     if (!form.name.trim()) { setFormError('Name required'); return }
     if (!form.is_fill && (form.weekly_hours_target === '' || Number(form.weekly_hours_target) < 0)) { setFormError('Hours must be 0 or more'); return }
+    const targetValue = form.is_fill ? 0 : Number(form.weekly_hours_target)
     const globalData = {
       name: form.name.trim(),
       color: form.color,
@@ -327,16 +328,13 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
       responsible_person: form.responsible_person || null,
       schedule_rule: form.is_fill ? null : (form.schedule_rule || null),
       split_equally: form.is_fill ? false : form.split_equally,
+      weekly_hours_target: targetValue,
     }
     try {
       if (editing === 'new') {
-        await api.createTask({
-          ...globalData,
-          weekly_hours_target: form.is_fill ? 0 : Number(form.weekly_hours_target),
-        })
+        await api.createTask(globalData)
       } else {
         await api.updateTask(editing, globalData)
-        const targetValue = form.is_fill ? 0 : Number(form.weekly_hours_target)
         await Promise.all(weeksFor(editing).map((wn) =>
           api.updateTaskWeekSettings(editing, wn, targetValue)
         ))
