@@ -204,7 +204,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     const fillIds = new Set(tasks.filter(t => t.is_fill).map(t => t.id))
     const taskMap = Object.fromEntries(tasks.map(t => [t.id, t]))
 
-    Promise.all([api.getDistribution(), api.getAllTaskWeekSettings()]).then(([rows, weekSettings]) => {
+    Promise.all([api.getDistribution(null, planningDate), api.getAllTaskWeekSettings()]).then(([rows, weekSettings]) => {
       // Per-week target overrides: { task_id: { week_number: target } }
       const weekTargetOverrides = {}
       for (const s of weekSettings) {
@@ -253,7 +253,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
       }
       setDistAvg(byWeek)
     }).catch(() => {})
-  }, [tasks])
+  }, [tasks, planningDate])
 
   // ── Computed indexes ──
   const assignedMap = {}
