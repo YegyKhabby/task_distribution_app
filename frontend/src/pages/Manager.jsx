@@ -248,8 +248,8 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
         const total = weekTotal[wn] ?? null
         const fd = weekFreshdesk[wn] || 0
         byWeek[wn] = total != null
-          ? { total: round(total), excl: round(total - fd), warnings: weekWarnings[wn] }
-          : { total: null, excl: null, warnings: weekWarnings[wn] }
+          ? { total: round(total), excl: round(total - fd), fd: round(fd), warnings: weekWarnings[wn] }
+          : { total: null, excl: null, fd: null, warnings: weekWarnings[wn] }
       }
       setDistAvg(byWeek)
     }).catch(() => {})
@@ -422,6 +422,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                     <>
                       <span className="font-semibold text-sm leading-tight">{w.total}h</span>
                       <span className={`text-[10px] leading-tight ${isActive ? 'text-indigo-200' : 'text-indigo-400'}`}>{w.excl}h excl FD</span>
+                      <span className={`text-[10px] leading-tight ${isActive ? 'text-emerald-300' : 'text-emerald-500'}`}>FD {w.fd}h</span>
                     </>
                   ) : (
                     <span className={`text-xs ${isActive ? 'text-indigo-300' : 'text-gray-400'}`}>not confirmed</span>
