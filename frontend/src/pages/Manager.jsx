@@ -739,18 +739,6 @@ function TaskForm({ form, setForm, error, onSave, onCancel, onAutoSave, isNew, w
 
   return (
     <div className="flex flex-wrap items-end gap-2 w-full">
-      {/* Color swatch */}
-      <div className="flex flex-col gap-1">
-        <span className="text-xs text-gray-400">Color</span>
-        <input
-          type="color"
-          value={form.color || '#6366f1'}
-          onChange={(e) => { setForm({ ...form, color: e.target.value }) }}
-          onBlur={(e) => auto({ color: e.target.value })}
-          className="w-9 h-[34px] rounded-md border border-gray-300 cursor-pointer p-0.5"
-          title="Task colour"
-        />
-      </div>
       <div className="flex flex-col gap-1 flex-1 min-w-40">
         <span className="text-xs text-gray-400">Task name</span>
         <input
