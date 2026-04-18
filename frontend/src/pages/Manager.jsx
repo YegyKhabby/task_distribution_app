@@ -785,6 +785,21 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
     setConfirming(false)
   }
 
+  const distributeAllWeeks = async () => {
+    setConfirming(true)
+    setError('')
+    setConfirmed(null)
+    setPreview(null)
+    try {
+      // week_number doesn't matter when week_only=false — backend iterates all 4
+      const result = await api.confirmDistribution(1, effectiveFrom, null, false)
+      setConfirmed(result)
+    } catch (e) {
+      setError(e.message)
+    }
+    setConfirming(false)
+  }
+
   const setOverride = (personId, taskId, val) => {
     setOverrides((o) => ({ ...o, [`${personId}:${taskId}`]: val }))
   }
@@ -807,10 +822,17 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
         </div>
         <button
           onClick={loadPreview}
-          disabled={loading}
+          disabled={loading || confirming}
           className="bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-900 disabled:opacity-50"
         >
           {loading ? 'Computing…' : 'Preview Distribution'}
+        </button>
+        <button
+          onClick={distributeAllWeeks}
+          disabled={confirming || loading}
+          className="bg-emerald-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+        >
+          {confirming ? 'Saving…' : confirmed ? '✓ All weeks saved!' : 'Distribute & Save All Weeks'}
         </button>
         <div className="flex items-center gap-2 ml-auto">
           <div className="flex flex-col gap-0.5">
