@@ -14,21 +14,32 @@ function weekIndexInMonth(mondayDate) {
   return Math.floor(diffDays / 7) + 1
 }
 
-function pastWeeks(n = 9) {
+function weekRange(pastN = 8, futureN = 4) {
   const today = new Date()
   const dow = today.getDay()
   const daysToThisMon = dow === 0 ? -6 : 1 - dow
-  let mon = new Date(today)
-  mon.setDate(today.getDate() + daysToThisMon)
+  const thisMon = new Date(today)
+  thisMon.setDate(today.getDate() + daysToThisMon)
 
   const weeks = []
-  while (weeks.length < n) {
-    const monStr = format(mon, 'yyyy-MM-dd')
-    const weekIdx = weekIndexInMonth(mon)
+  // future weeks first (descending so current week ends up at top)
+  for (let i = futureN; i >= 1; i--) {
+    const mon = new Date(thisMon); mon.setDate(thisMon.getDate() + i * 7)
     const fri = new Date(mon); fri.setDate(mon.getDate() + 4)
     weeks.push({
-      value: monStr,
-      label: `Week ${weekIdx}  ·  ${format(mon, 'MMM d')} – ${format(fri, 'MMM d, yyyy')}`,
+      value: format(mon, 'yyyy-MM-dd'),
+      label: `Week ${weekIndexInMonth(mon)}  ·  ${format(mon, 'MMM d')} – ${format(fri, 'MMM d, yyyy')}`,
+      isFuture: true,
+    })
+  }
+  // current + past weeks
+  let mon = new Date(thisMon)
+  for (let i = 0; i <= pastN; i++) {
+    const fri = new Date(mon); fri.setDate(mon.getDate() + 4)
+    weeks.push({
+      value: format(mon, 'yyyy-MM-dd'),
+      label: `Week ${weekIndexInMonth(mon)}  ·  ${format(mon, 'MMM d')} – ${format(fri, 'MMM d, yyyy')}`,
+      isFuture: false,
     })
     mon = new Date(mon); mon.setDate(mon.getDate() - 7)
   }
@@ -227,8 +238,9 @@ function AddTaskForm({ personId, weekDates, tasks, onDone, onCancel }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Actual() {
-  const WEEKS = pastWeeks(9)
-  const [selectedWeek, setSelectedWeek] = useState(WEEKS[0].value)
+  const WEEKS = weekRange(8, 4)
+  const thisMonday = WEEKS.find(w => !w.isFuture)?.value ?? WEEKS[0].value
+  const [selectedWeek, setSelectedWeek] = useState(thisMonday)
   const [entries, setEntries] = useState([])
   const [people, setPeople] = useState([])
   const [tasks, setTasks] = useState([])
@@ -352,7 +364,7 @@ export default function Actual() {
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm ml-1"
           >
             {WEEKS.map((w) => (
-              <option key={w.value} value={w.value}>{w.label}</option>
+              <option key={w.value} value={w.value}>{w.isFuture ? `▶ ${w.label}` : w.label}</option>
             ))}
           </select>
 

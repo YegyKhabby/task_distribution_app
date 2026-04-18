@@ -316,34 +316,46 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setFormError('')
   }
 
-  const save = async () => {
-    if (!form.name.trim()) { setFormError('Name required'); return }
-    if (!form.is_fill && (form.weekly_hours_target === '' || Number(form.weekly_hours_target) < 0)) { setFormError('Hours must be 0 or more'); return }
-    const targetValue = form.is_fill ? 0 : Number(form.weekly_hours_target)
+  // save() accepts an optional formData so auto-save can pass the new value
+  // immediately without waiting for React state to flush
+  const save = async (formData = null) => {
+    const f = formData || form
+    if (!f.name.trim()) { setFormError('Name required'); return }
+    if (!f.is_fill && (f.weekly_hours_target === '' || Number(f.weekly_hours_target) < 0)) { setFormError('Hours must be 0 or more'); return }
+    setFormError('')
+    const targetValue = f.is_fill ? 0 : Number(f.weekly_hours_target)
     const globalData = {
-      name: form.name.trim(),
-      color: form.color,
-      priority: form.priority ? Number(form.priority) : null,
-      is_fill: form.is_fill,
-      responsible_person: form.responsible_person || null,
-      schedule_rule: form.is_fill ? null : (form.schedule_rule || null),
-      split_equally: form.is_fill ? false : form.split_equally,
+      name: f.name.trim(),
+      color: f.color,
+      priority: f.priority ? Number(f.priority) : null,
+      is_fill: f.is_fill,
+      responsible_person: f.responsible_person || null,
+      schedule_rule: f.is_fill ? null : (f.schedule_rule || null),
+      split_equally: f.is_fill ? false : f.split_equally,
       weekly_hours_target: targetValue,
     }
     try {
       if (editing === 'new') {
         await api.createTask(globalData)
+        setEditing(null)
+        setExpanded(null)
       } else {
         await api.updateTask(editing, globalData)
         await Promise.all(weeksFor(editing).map((wn) =>
           api.updateTaskWeekSettings(editing, wn, targetValue)
         ))
       }
-      setEditing(null)
-      setExpanded(null)
       await onReload()
       await loadWeekData(weekNumber)
     } catch (e) { setFormError(e.message) }
+  }
+
+  // auto-save a single field change for existing tasks
+  const autoSave = (updatedFields) => {
+    if (editing === 'new') return
+    const newForm = { ...form, ...updatedFields }
+    setForm(newForm)
+    save(newForm)
   }
 
   const remove = async (id) => {
@@ -571,7 +583,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                     setForm={setForm}
                     error={formError}
                     onSave={save}
-                    onCancel={() => { setEditing(null); setExpanded(null) }}
+                    onAutoSave={autoSave}
                     weekNumber={weekNumber}
                     responsiblePersons={responsiblePersons.map(rp => rp.name)}
                   />
@@ -588,7 +600,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                           <input
                             type="checkbox"
                             checked={form.split_equally}
-                            onChange={(e) => setForm({ ...form, split_equally: e.target.checked })}
+                            onChange={(e) => autoSave({ split_equally: e.target.checked })}
                             className="w-3.5 h-3.5 rounded text-indigo-600"
                           />
                           <span className="text-xs text-gray-500">Split equally between people</span>
@@ -720,27 +732,46 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   )
 }
 
-function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 1, responsiblePersons }) {
+function TaskForm({ form, setForm, error, onSave, onCancel, onAutoSave, isNew, weekNumber = 1, responsiblePersons }) {
+  // For existing tasks: call onAutoSave with changed fields immediately.
+  // For new tasks: fields are collected and saved all at once on "Add".
+  const auto = (fields) => { if (!isNew && onAutoSave) onAutoSave(fields) }
+
   return (
     <div className="flex flex-wrap items-end gap-2 w-full">
-      <div className="flex flex-col gap-1 w-full">
+      {/* Color swatch */}
+      <div className="flex flex-col gap-1">
+        <span className="text-xs text-gray-400">Color</span>
+        <input
+          type="color"
+          value={form.color || '#6366f1'}
+          onChange={(e) => { setForm({ ...form, color: e.target.value }) }}
+          onBlur={(e) => auto({ color: e.target.value })}
+          className="w-9 h-[34px] rounded-md border border-gray-300 cursor-pointer p-0.5"
+          title="Task colour"
+        />
+      </div>
+      <div className="flex flex-col gap-1 flex-1 min-w-40">
         <span className="text-xs text-gray-400">Task name</span>
         <input
           className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
           placeholder="Task name"
           value={form.name}
           onChange={(e) => setForm({ ...form, name: e.target.value })}
-          autoFocus
+          onBlur={(e) => auto({ name: e.target.value })}
+          autoFocus={isNew}
         />
       </div>
       <div className="flex flex-col gap-1 w-28">
-        <span className="text-xs text-gray-400">Hrs / week for W{weekNumber}</span>
+        <span className="text-xs text-gray-400">Hrs / week{!isNew ? ` W${weekNumber}` : ''}</span>
         <input
           type="number" min={0} step={0.5}
           className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
           placeholder="0"
           value={form.weekly_hours_target}
           onChange={(e) => setForm({ ...form, weekly_hours_target: e.target.value })}
+          onBlur={(e) => auto({ weekly_hours_target: e.target.value })}
+          disabled={form.is_fill}
         />
       </div>
       <div className="flex flex-col gap-1 w-20">
@@ -751,14 +782,15 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 
           placeholder="—"
           value={form.priority}
           onChange={(e) => setForm({ ...form, priority: e.target.value })}
+          onBlur={(e) => auto({ priority: e.target.value })}
         />
       </div>
       <div className="flex flex-col gap-1">
-        <span className="text-xs text-gray-400">Full-time responsible (global)</span>
+        <span className="text-xs text-gray-400">Full-time responsible</span>
         <select
           className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
           value={form.responsible_person}
-          onChange={(e) => setForm({ ...form, responsible_person: e.target.value })}
+          onChange={(e) => { setForm({ ...form, responsible_person: e.target.value }); auto({ responsible_person: e.target.value }) }}
         >
           <option value="">None</option>
           {responsiblePersons.map((name) => (
@@ -772,7 +804,7 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 
           <select
             className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
             value={form.schedule_rule}
-            onChange={(e) => setForm({ ...form, schedule_rule: e.target.value })}
+            onChange={(e) => { setForm({ ...form, schedule_rule: e.target.value }); auto({ schedule_rule: e.target.value }) }}
             title={SCHEDULE_RULES.find(r => r.value === form.schedule_rule)?.hint || ''}
           >
             {SCHEDULE_RULES.map(r => (
@@ -787,16 +819,22 @@ function TaskForm({ form, setForm, error, onSave, onCancel, isNew, weekNumber = 
           <input
             type="checkbox"
             checked={form.is_fill}
-            onChange={(e) => setForm({ ...form, is_fill: e.target.checked, weekly_hours_target: e.target.checked ? 0 : form.weekly_hours_target, schedule_rule: e.target.checked ? '' : form.schedule_rule })}
+            onChange={(e) => {
+              const fields = { is_fill: e.target.checked, weekly_hours_target: e.target.checked ? 0 : form.weekly_hours_target, schedule_rule: e.target.checked ? '' : form.schedule_rule }
+              setForm({ ...form, ...fields })
+              auto(fields)
+            }}
             className="w-4 h-4 rounded text-emerald-600"
           />
         </label>
       </div>
       {error && <span className="text-red-500 text-xs w-full">{error}</span>}
-      <button onClick={onSave} className="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700 self-end">
-        {isNew ? 'Add' : 'Save'}
-      </button>
-      <button onClick={onCancel} className="text-gray-500 px-3 py-1.5 rounded-md text-sm hover:bg-gray-100 self-end">Cancel</button>
+      {isNew && (
+        <>
+          <button onClick={onSave} className="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700 self-end">Add</button>
+          <button onClick={onCancel} className="text-gray-500 px-3 py-1.5 rounded-md text-sm hover:bg-gray-100 self-end">Cancel</button>
+        </>
+      )}
     </div>
   )
 }
