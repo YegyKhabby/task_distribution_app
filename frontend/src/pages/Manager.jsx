@@ -195,7 +195,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setThisWeekOnly(new Set()) // reset per-task scope toggles on week change
   }
 
-  // ── Load Freshdesk distribution averages ──
+  // ── Load per-week distribution totals ──
   useEffect(() => {
     if (!tasks.length) return
     const freshdeskFillIds = new Set(
@@ -209,16 +209,15 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
           weekFreshdesk[row.week_number] = (weekFreshdesk[row.week_number] || 0) + row.hours_per_week
         }
       }
-      const avg = (obj) => {
-        const vals = Object.values(obj)
-        return vals.length ? Math.round(vals.reduce((s, h) => s + h, 0) / vals.length * 2) / 2 : null
+      // Build per-week {total, excl} — round to 0.5
+      const round = (v) => Math.round(v * 2) / 2
+      const byWeek = {}
+      for (const wn of [1, 2, 3, 4]) {
+        const total = weekTotal[wn] ?? null
+        const fd = weekFreshdesk[wn] || 0
+        byWeek[wn] = total != null ? { total: round(total), excl: round(total - fd) } : null
       }
-      // Compute excl-Freshdesk per week first, then average — avoids averaging over different week counts
-      const weekExcl = {}
-      for (const wn of Object.keys(weekTotal)) {
-        weekExcl[wn] = (weekTotal[wn] || 0) - (weekFreshdesk[wn] || 0)
-      }
-      setDistAvg({ total: avg(weekTotal), excl: avg(weekExcl) })
+      setDistAvg(byWeek)
     }).catch(() => {})
   }, [tasks])
 
@@ -251,9 +250,8 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     }
   }
 
-  // ── Hours summary ──
-  const totalInclFreshdesk = distAvg?.total ?? null
-  const totalExclFreshdesk = distAvg?.excl ?? null
+  // ── Hours summary — per-week breakdown ──
+  const weekHours = distAvg // { 1: {total, excl} | null, 2: ..., 3: ..., 4: ... }
 
   // ── Responsible persons ──
   const addRp = async () => {
@@ -363,19 +361,35 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
 
   return (
     <div>
-      {/* ── Hours summary bar ── */}
-      <div className="flex items-center gap-4 mb-4 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm">
-        <span className="text-indigo-700 font-medium">Total hrs/week:</span>
-        <span className="text-indigo-900 font-semibold">
-          {totalInclFreshdesk != null ? `${totalInclFreshdesk}h` : '—'}
-          <span className="font-normal text-indigo-500"> (incl. Freshdesk)</span>
-        </span>
-        <span className="text-gray-300">|</span>
-        <span className="text-indigo-900 font-semibold">
-          {totalExclFreshdesk != null ? `${totalExclFreshdesk}h` : '—'}
-          <span className="font-normal text-indigo-500"> (excl. Freshdesk)</span>
-        </span>
-      </div>
+      {/* ── Hours summary bar — per week ── */}
+      {weekHours && (
+        <div className="flex items-center gap-1 mb-4 px-4 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl text-sm overflow-x-auto">
+          <span className="text-indigo-700 font-medium shrink-0 mr-2">Total hrs:</span>
+          {[1, 2, 3, 4].map((wn) => {
+            const w = weekHours[wn]
+            const isActive = wn === weekNumber
+            return (
+              <div
+                key={wn}
+                onClick={() => switchWeek(wn)}
+                className={`flex flex-col items-center px-3 py-1 rounded-lg cursor-pointer transition-colors shrink-0 ${
+                  isActive ? 'bg-indigo-600 text-white' : 'bg-white border border-indigo-100 text-indigo-900 hover:bg-indigo-100'
+                }`}
+              >
+                <span className={`text-[10px] font-medium mb-0.5 ${isActive ? 'text-indigo-200' : 'text-indigo-400'}`}>W{wn}</span>
+                {w ? (
+                  <>
+                    <span className="font-semibold text-sm leading-tight">{w.total}h</span>
+                    <span className={`text-[10px] leading-tight ${isActive ? 'text-indigo-200' : 'text-indigo-400'}`}>{w.excl}h excl FD</span>
+                  </>
+                ) : (
+                  <span className="text-xs text-gray-400">—</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* ── Top controls: week selector + manage people + add task ── */}
       <div className="flex items-center gap-2 mb-4 flex-wrap">
