@@ -192,6 +192,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setDistribution([])
     setWeekFixedHours([])
     setWeekSettings([])
+    setThisWeekOnly(new Set()) // reset per-task scope toggles on week change
   }
 
   // ── Load Freshdesk distribution averages ──
@@ -212,7 +213,12 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
         const vals = Object.values(obj)
         return vals.length ? Math.round(vals.reduce((s, h) => s + h, 0) / vals.length * 2) / 2 : null
       }
-      setDistAvg({ total: avg(weekTotal), freshdesk: avg(weekFreshdesk) })
+      // Compute excl-Freshdesk per week first, then average — avoids averaging over different week counts
+      const weekExcl = {}
+      for (const wn of Object.keys(weekTotal)) {
+        weekExcl[wn] = (weekTotal[wn] || 0) - (weekFreshdesk[wn] || 0)
+      }
+      setDistAvg({ total: avg(weekTotal), excl: avg(weekExcl) })
     }).catch(() => {})
   }, [tasks])
 
@@ -247,9 +253,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
 
   // ── Hours summary ──
   const totalInclFreshdesk = distAvg?.total ?? null
-  const totalExclFreshdesk = distAvg?.total != null && distAvg?.freshdesk != null
-    ? Math.round((distAvg.total - distAvg.freshdesk) * 2) / 2
-    : null
+  const totalExclFreshdesk = distAvg?.excl ?? null
 
   // ── Responsible persons ──
   const addRp = async () => {
