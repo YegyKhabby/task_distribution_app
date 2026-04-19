@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { format } from 'date-fns'
+import XLSX from 'xlsx-js-style'
 import { api } from '../api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -53,6 +54,7 @@ function addDaysToDate(dateStr, n) {
 }
 
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
 /** Group entries into { personId -> { taskKey -> { dateStr -> {id, hours} } } } */
 function buildGrid(entries) {
@@ -84,6 +86,298 @@ function lightenHex(hex, factor = 0.88) {
   const g2 = Math.round(g + (255 - g) * factor)
   const b2 = Math.round(b + (255 - b) * factor)
   return `rgb(${r2},${g2},${b2})`
+}
+
+function sheetHex(hex, factor = 0.88) {
+  const h = (hex || '6366F1').replace('#', '')
+  if (h.length !== 6) return 'EEF2FF'
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  const to2 = (n) => Math.round(n + (255 - n) * factor).toString(16).padStart(2, '0').toUpperCase()
+  return `${to2(r)}${to2(g)}${to2(b)}`
+}
+
+function mondayOf(dateStr) {
+  const d = new Date(`${dateStr}T12:00:00`)
+  const dow = d.getDay()
+  const diff = dow === 0 ? -6 : 1 - dow
+  d.setDate(d.getDate() + diff)
+  return format(d, 'yyyy-MM-dd')
+}
+
+function workdaysInMonth(year, month) {
+  const lastDay = new Date(year, month, 0).getDate()
+  const dates = []
+  for (let day = 1; day <= lastDay; day++) {
+    const d = new Date(year, month - 1, day, 12, 0, 0)
+    const dow = d.getDay()
+    if (dow >= 1 && dow <= 5) dates.push(format(d, 'yyyy-MM-dd'))
+  }
+  return dates
+}
+
+function exportActualWorkbook({ dates, entries, people, tasks, locations, filename, sheetName }) {
+  const sortedDates = [...dates].sort()
+  if (!sortedDates.length) return
+
+  const taskColorMap = Object.fromEntries(tasks.map((t) => [t.id, t.color]))
+  const personNameMap = Object.fromEntries(people.map((p) => [p.id, p.name]))
+  for (const e of entries) {
+    if (e.person_id && e.people?.name && !personNameMap[e.person_id]) personNameMap[e.person_id] = e.people.name
+  }
+
+  const personIds = Array.from(new Set([
+    ...people.map((p) => p.id),
+    ...entries.map((e) => e.person_id),
+  ])).sort((a, b) => (personNameMap[a] || '').localeCompare(personNameMap[b] || ''))
+
+  const weekGroups = []
+  for (const dateStr of sortedDates) {
+    const weekStart = mondayOf(dateStr)
+    let group = weekGroups[weekGroups.length - 1]
+    if (!group || group.weekStart !== weekStart) {
+      const d = new Date(`${dateStr}T12:00:00`)
+      group = {
+        weekStart,
+        label: `Week of ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`,
+        dates: [],
+      }
+      weekGroups.push(group)
+    }
+    group.dates.push(dateStr)
+  }
+
+  const columns = []
+  weekGroups.forEach((group, groupIndex) => {
+    group.dates.forEach((dateStr) => columns.push({ type: 'day', date: dateStr, groupIndex }))
+    columns.push({ type: 'week_total', groupIndex })
+  })
+
+  const ws = {}
+  const merges = []
+  const addr = (r, c) => XLSX.utils.encode_cell({ r, c })
+  const col = (c) => XLSX.utils.encode_col(c)
+  const setCell = (r, c, v, t, s) => {
+    ws[addr(r, c)] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} }
+  }
+  const setFormula = (r, c, formula, s) => {
+    ws[addr(r, c)] = { t: 'n', f: formula, s: s || {} }
+  }
+
+  const titleStyle = {
+    fill: { fgColor: { rgb: '312E81' } },
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 13 },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  }
+  const darkHeader = {
+    fill: { fgColor: { rgb: '374151' } },
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  }
+  const personHeader = {
+    fill: { fgColor: { rgb: 'EEF2FF' } },
+    font: { bold: true, color: { rgb: '3730A3' }, sz: 10 },
+    alignment: { horizontal: 'left', vertical: 'center' },
+  }
+  const totalStyle = {
+    fill: { fgColor: { rgb: 'F0FDF4' } },
+    font: { bold: true, color: { rgb: '166534' }, sz: 10 },
+    alignment: { horizontal: 'center', vertical: 'center' },
+  }
+  const cellStyle = { alignment: { horizontal: 'center', vertical: 'center' }, font: { sz: 9 } }
+
+  const ncols = 1 + columns.length + 1
+  let row = 0
+
+  setCell(row, 0, sheetName, 's', titleStyle)
+  merges.push({ s: { r: row, c: 0 }, e: { r: row, c: ncols - 1 } })
+  for (let c = 1; c < ncols; c++) setCell(row, c, '', 's', { fill: { fgColor: { rgb: '312E81' } } })
+  row++
+
+  setCell(row, 0, 'Person / Task', 's', darkHeader)
+  let cursorCol = 1
+  weekGroups.forEach((group, idx) => {
+    const width = group.dates.length + 1
+    const c1 = cursorCol
+    const c2 = cursorCol + width - 1
+    const groupColor = ['3730A3', '1E40AF', '0369A1', '0F766E', '0E7490'][idx % 5]
+    setCell(row, c1, group.label, 's', {
+      fill: { fgColor: { rgb: groupColor } },
+      font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    })
+    if (c1 < c2) merges.push({ s: { r: row, c: c1 }, e: { r: row, c: c2 } })
+    for (let c = c1 + 1; c <= c2; c++) setCell(row, c, '', 's', { fill: { fgColor: { rgb: groupColor } } })
+    cursorCol = c2 + 1
+  })
+  setCell(row, ncols - 1, 'Total', 's', darkHeader)
+  row++
+
+  setCell(row, 0, '', 's', { fill: { fgColor: { rgb: '374151' } } })
+  columns.forEach((entry, idx) => {
+    if (entry.type === 'day') {
+      const d = new Date(`${entry.date}T12:00:00`)
+      setCell(row, 1 + idx, `${DAY_LABELS[d.getDay() - 1]} ${String(d.getDate()).padStart(2, '0')}`, 's', darkHeader)
+    } else {
+      setCell(row, 1 + idx, 'Week Total', 's', darkHeader)
+    }
+  })
+  setCell(row, ncols - 1, 'Total', 's', darkHeader)
+  row++
+
+  const subtotalRows = []
+
+  for (const personId of personIds) {
+    const personEntries = entries.filter((e) => e.person_id === personId && sortedDates.includes(e.date))
+    const personName = personNameMap[personId]
+    if (!personName) continue
+
+    setCell(row, 0, personName, 's', personHeader)
+    merges.push({ s: { r: row, c: 0 }, e: { r: row, c: ncols - 1 } })
+    for (let c = 1; c < ncols; c++) setCell(row, c, '', 's', { fill: { fgColor: { rgb: 'EEF2FF' } } })
+    row++
+
+    setCell(row, 0, 'Location', 's', { font: { sz: 9, color: { rgb: '6B7280' } } })
+    columns.forEach((entry, idx) => {
+      if (entry.type === 'day') {
+        const loc = locations[personId]?.[entry.date] ?? null
+        const isHome = loc === 'home'
+        const isOff = loc == null
+        setCell(row, 1 + idx, isOff ? 'Off' : (isHome ? 'Home' : 'Office'), 's', {
+          fill: { fgColor: { rgb: isOff ? 'F3F4F6' : (isHome ? 'CCFBF1' : 'E0E7FF') } },
+          font: { sz: 9, color: { rgb: isOff ? '6B7280' : (isHome ? '0F766E' : '3730A3') } },
+          alignment: { horizontal: 'center', vertical: 'center' },
+        })
+      } else {
+        setCell(row, 1 + idx, '', 's', {})
+      }
+    })
+    setCell(row, ncols - 1, '', 's', {})
+    row++
+
+    const taskMap = new Map()
+    for (const e of personEntries) {
+      const key = `${e.task_id || ''}__${e.task_label}`
+      if (!taskMap.has(key)) {
+        taskMap.set(key, { task_id: e.task_id || null, task_label: e.task_label, cells: {} })
+      }
+      taskMap.get(key).cells[e.date] = (taskMap.get(key).cells[e.date] || 0) + e.hours
+    }
+    const taskRows = [...taskMap.values()].sort((a, b) => a.task_label.localeCompare(b.task_label))
+    const personTaskStartRow = row
+
+    if (!taskRows.length) {
+      setCell(row, 0, '—', 's', { fill: { fgColor: { rgb: 'F9FAFB' } }, font: { sz: 9 } })
+      columns.forEach((_, idx) => setCell(row, 1 + idx, '', 's', { fill: { fgColor: { rgb: 'F9FAFB' } } }))
+      setCell(row, ncols - 1, '', 's', { fill: { fgColor: { rgb: 'F9FAFB' } } })
+      row++
+    } else {
+      for (const taskRow of taskRows) {
+        const taskColor = (taskColorMap[taskRow.task_id] || '').replace('#', '')
+        const taskBg = taskColor ? sheetHex(taskColor, 0.88) : 'F9FAFB'
+        setCell(row, 0, taskRow.task_label, 's', {
+          fill: { fgColor: { rgb: taskBg } },
+          font: { sz: 9, color: { rgb: taskColor || '374151' } },
+          alignment: { horizontal: 'left', vertical: 'center' },
+        })
+
+        const countedWeekCols = []
+        let colCursor = 1
+        weekGroups.forEach(() => {
+          const dayCols = []
+          for (const entry of columns.slice(colCursor - 1)) {
+            if (entry.type === 'week_total') break
+          }
+          const groupDayCols = []
+          while (columns[colCursor - 1]?.type === 'day') {
+            const dateStr = columns[colCursor - 1].date
+            const hours = taskRow.cells[dateStr]
+            if (hours > 0) {
+              setCell(row, colCursor, hours, 'n', { ...cellStyle, fill: { fgColor: { rgb: taskBg } } })
+              groupDayCols.push(colCursor)
+            } else {
+              setCell(row, colCursor, '', 's', { fill: { fgColor: { rgb: 'FFFFFF' } } })
+            }
+            colCursor++
+          }
+          if (groupDayCols.length > 0) {
+            setFormula(row, colCursor, `SUM(${col(groupDayCols[0])}${row + 1}:${col(groupDayCols[groupDayCols.length - 1])}${row + 1})`, {
+              ...cellStyle,
+              font: { bold: true, sz: 9, color: { rgb: taskColor || '374151' } },
+              fill: { fgColor: { rgb: taskBg } },
+            })
+          } else {
+            setCell(row, colCursor, '', 's', { fill: { fgColor: { rgb: 'FFFFFF' } } })
+          }
+          countedWeekCols.push(colCursor)
+          colCursor++
+        })
+        setFormula(row, ncols - 1, `SUM(${countedWeekCols.map((c) => `${col(c)}${row + 1}`).join(',')})`, {
+          ...cellStyle,
+          font: { bold: true, sz: 9 },
+        })
+        row++
+      }
+    }
+
+    const subtotalRow = row
+    subtotalRows.push(subtotalRow)
+    setCell(subtotalRow, 0, 'Sub-total', 's', { ...totalStyle, alignment: { horizontal: 'left', vertical: 'center' } })
+    let colCursor = 1
+    while (colCursor < ncols - 1) {
+      const startCol = colCursor
+      while (columns[colCursor - 1]?.type === 'day') {
+        setFormula(subtotalRow, colCursor, `SUM(${col(colCursor)}${personTaskStartRow + 1}:${col(colCursor)}${subtotalRow})`, totalStyle)
+        colCursor++
+      }
+      setFormula(subtotalRow, colCursor, `SUM(${col(startCol)}${subtotalRow + 1}:${col(colCursor - 1)}${subtotalRow + 1})`, totalStyle)
+      colCursor++
+    }
+    const weekTotalCols = columns
+      .map((entry, idx) => (entry.type === 'week_total' ? idx + 1 : null))
+      .filter(Boolean)
+    setFormula(subtotalRow, ncols - 1, `SUM(${weekTotalCols.map((c) => `${col(c)}${subtotalRow + 1}`).join(',')})`, totalStyle)
+    row++
+  }
+
+  setCell(row, 0, 'Team total', 's', {
+    fill: { fgColor: { rgb: '3730A3' } },
+    font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
+    alignment: { horizontal: 'left', vertical: 'center' },
+  })
+  for (let c = 1; c < ncols; c++) {
+    setCell(row, c, '', 's', {
+      fill: { fgColor: { rgb: '3730A3' } },
+      font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    })
+  }
+  for (let c = 1; c < ncols; c++) {
+    if (subtotalRows.length > 0) {
+      setFormula(row, c, `SUM(${subtotalRows.map((r) => `${col(c)}${r + 1}`).join(',')})`, {
+        fill: { fgColor: { rgb: '3730A3' } },
+        font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      })
+    }
+  }
+
+  ws['!merges'] = merges
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: ncols - 1 } })
+  ws['!cols'] = [{ wch: 28 }, ...columns.map((entry) => ({ wch: entry.type === 'week_total' ? 11 : 10 })), { wch: 10 }]
+  ws['!freeze'] = { xSplit: 1, ySplit: 3 }
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31))
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // ── Cell: inline-editable hours ───────────────────────────────────────────────
@@ -324,7 +618,8 @@ export default function Actual() {
   }
 
   async function handleToggleLocation(personId, dateStr) {
-    const current = locations[personId]?.[dateStr] || 'office'
+    const current = locations[personId]?.[dateStr] ?? null
+    if (current == null) return
     const next = current === 'office' ? 'home' : 'office'
     setLocations((prev) => ({
       ...prev,
@@ -336,7 +631,46 @@ export default function Actual() {
   function handleExport() {
     const dates = exportDays.map((i) => weekDates[i])
     if (!dates.length) return
-    window.open(api.getActualExportUrl(dates), '_blank')
+    exportActualWorkbook({
+      dates,
+      entries,
+      people,
+      tasks,
+      locations,
+      filename: dates.length === 1 ? `actual_${dates[0]}.xlsx` : `actual_${dates[0]}_to_${dates[dates.length - 1]}.xlsx`,
+      sheetName: dates.length === 1 ? `Actual ${dates[0]}` : `Actual Week`,
+    })
+  }
+
+  async function handleMonthExport() {
+    const d = new Date(selectedWeek + 'T12:00:00')
+    const year = d.getFullYear()
+    const month = d.getMonth() + 1
+    const dates = workdaysInMonth(year, month)
+    const weekStarts = [...new Set(dates.map(mondayOf))]
+    const [entrySets, locationSets] = await Promise.all([
+      Promise.all(weekStarts.map((weekStart) => api.getActual(weekStart))),
+      Promise.all(weekStarts.map((weekStart) => api.getActualLocation(weekStart))),
+    ])
+    const monthEntries = entrySets.flat().filter((e) => dates.includes(e.date))
+    const monthLocations = {}
+    locationSets.forEach((weekLoc) => {
+      Object.entries(weekLoc || {}).forEach(([personId, dayMap]) => {
+        if (!monthLocations[personId]) monthLocations[personId] = {}
+        Object.entries(dayMap || {}).forEach(([dateStr, loc]) => {
+          if (dates.includes(dateStr)) monthLocations[personId][dateStr] = loc
+        })
+      })
+    })
+    exportActualWorkbook({
+      dates,
+      entries: monthEntries,
+      people,
+      tasks,
+      locations: monthLocations,
+      filename: `actual_${year}_${String(month).padStart(2, '0')}.xlsx`,
+      sheetName: `Actual ${MONTH_SHORT[month - 1]} ${year}`,
+    })
   }
 
   function toggleExportDay(i) {
@@ -406,6 +740,12 @@ export default function Actual() {
               </svg>
               Excel
             </button>
+            <button
+              onClick={handleMonthExport}
+              className="text-sm border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-50"
+            >
+              Month Excel
+            </button>
           </div>
         </div>
       </div>
@@ -461,21 +801,28 @@ export default function Actual() {
                     <tr key={`${person.id}-loc`} className="border-t border-indigo-100">
                       <td className="px-4 py-0.5 text-xs text-gray-400">Location</td>
                       {weekDates.map((d) => {
-                        const loc = locations[person.id]?.[d] || 'office'
+                        const loc = locations[person.id]?.[d] ?? null
                         const isHome = loc === 'home'
+                        const isOff = loc == null
                         return (
                           <td key={d} className="px-1 py-0.5 text-center">
-                            <button
-                              onClick={() => handleToggleLocation(person.id, d)}
-                              title={isHome ? 'Home — click to switch to office' : 'Office — click to switch to home'}
-                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors ${
-                                isHome
-                                  ? 'bg-sky-100 text-sky-700 hover:bg-sky-200'
-                                  : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
-                              }`}
-                            >
-                              {isHome ? '🏠' : '🏢'}
-                            </button>
+                            {isOff ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                                Off
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => handleToggleLocation(person.id, d)}
+                                title={isHome ? 'Home — click to switch to office' : 'Office — click to switch to home'}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors ${
+                                  isHome
+                                    ? 'bg-sky-100 text-sky-700 hover:bg-sky-200'
+                                    : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                                }`}
+                              >
+                                {isHome ? '🏠' : '🏢'}
+                              </button>
+                            )}
                           </td>
                         )
                       })}

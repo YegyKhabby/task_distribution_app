@@ -3,6 +3,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import Response, StreamingResponse
 from database import supabase
 from datetime import date, timedelta
+import calendar as cal_module
 from io import BytesIO
 from models import ActualHoursCreate, ActualHoursUpdate, CopyWeekRequest, ActualLocationUpsert
 from routers.calendar import _compute_day_view
@@ -111,7 +112,8 @@ def get_actual_location(week_start: str = Query(...)):
     for r in sched_rows:
         sched_map.setdefault(r["person_id"], {})[r["day_of_week"]] = r.get("location") or "office"
 
-    # Build result: for every person × workday, return effective location
+    # Build result: for every person × workday, return effective location.
+    # Non-working days should stay empty instead of defaulting to office.
     people = supabase.table("people").select("id").eq("active", True).execute().data
     result = {}
     for p in people:
@@ -121,8 +123,11 @@ def get_actual_location(week_start: str = Query(...)):
             d = monday + timedelta(days=i)
             d_str = str(d)
             dow = i + 1  # 1=Mon…5=Fri
-            default = sched_map.get(pid, {}).get(dow, "office")
-            result[pid][d_str] = override_map.get((pid, d_str), default)
+            default = sched_map.get(pid, {}).get(dow)
+            if default is None:
+                result[pid][d_str] = None
+            else:
+                result[pid][d_str] = override_map.get((pid, d_str), default)
 
     return result
 
@@ -136,14 +141,10 @@ def upsert_actual_location(body: ActualLocationUpsert):
     return {"ok": True}
 
 
-@router.get("/export")
-def export_actual_excel(dates: str = Query(...)):
-    """Download an Excel file with one sheet per date showing actual hours (Task × Person)."""
-    date_list = sorted(set(d.strip() for d in dates.split(",") if d.strip()))
+def _build_actual_excel_response(date_list: list[str]):
     if not date_list:
         return Response(status_code=400)
 
-    # Fetch all actual_hours for the requested dates
     rows = (
         supabase.table("actual_hours")
         .select("person_id, task_id, task_label, date, hours, people(name), tasks(name, color)")
@@ -209,8 +210,7 @@ def export_actual_excel(dates: str = Query(...)):
             tcolor = td["color"] or "6366F1"
             light = _lighten(tcolor, 0.88)
             row_vals = [td["label"]] + [td["people"].get(p, None) for p in person_names]
-            row_total = sum(v for v in row_vals[1:] if v)
-            row_vals.append(row_total if row_total else None)
+            row_vals.append(None)
             ws.append(row_vals)
 
             # Task name cell
@@ -227,16 +227,14 @@ def export_actual_excel(dates: str = Query(...)):
                 cell.font = Font(size=9, bold=(col_idx == len(headers)))
                 cell.alignment = Alignment(horizontal="center", vertical="center")
                 cell.border = thin_border
+            if person_names:
+                total_cell = ws.cell(row=row_idx, column=len(headers))
+                total_cell.value = f"=SUM(B{row_idx}:{get_column_letter(len(headers) - 1)}{row_idx})"
             ws.row_dimensions[row_idx].height = 15
 
         # Team Total row
         total_row_idx = len(task_order) + 2
-        person_totals = [
-            sum(task_data[k]["people"].get(p, 0) for k in task_order)
-            for p in person_names
-        ]
-        grand_total = sum(person_totals)
-        totals = ["Team Total"] + [t if t else None for t in person_totals] + [grand_total or None]
+        totals = ["Team Total"] + ([None] * len(person_names)) + [None]
         ws.append(totals)
         for col_idx in range(1, len(headers) + 1):
             cell = ws.cell(row=total_row_idx, column=col_idx)
@@ -244,6 +242,8 @@ def export_actual_excel(dates: str = Query(...)):
             cell.font = Font(bold=True, color="166534", size=9)
             cell.alignment = Alignment(horizontal="center" if col_idx > 1 else "left", vertical="center")
             cell.border = thin_border
+        for col_idx in range(2, len(headers) + 1):
+            ws.cell(row=total_row_idx, column=col_idx).value = f"=SUM({get_column_letter(col_idx)}2:{get_column_letter(col_idx)}{total_row_idx - 1})"
         ws.row_dimensions[total_row_idx].height = 16
 
         # Column widths
@@ -264,6 +264,25 @@ def export_actual_excel(dates: str = Query(...)):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/export")
+def export_actual_excel(dates: str = Query(...)):
+    """Download an Excel file with one sheet per date showing actual hours (Task × Person)."""
+    date_list = sorted(set(d.strip() for d in dates.split(",") if d.strip()))
+    return _build_actual_excel_response(date_list)
+
+
+@router.get("/export-month")
+def export_actual_month_excel(year: int = Query(...), month: int = Query(..., ge=1, le=12)):
+    """Download an Excel file with one sheet per workday for a whole month."""
+    last_day = cal_module.monthrange(year, month)[1]
+    date_list = [
+        str(date(year, month, day))
+        for day in range(1, last_day + 1)
+        if date(year, month, day).weekday() < 5
+    ]
+    return _build_actual_excel_response(date_list)
 
 
 @router.post("/copy-week")
