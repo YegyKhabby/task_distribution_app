@@ -70,6 +70,13 @@ class PreferredDayUpdate(BaseModel):
     preferred_days: Optional[list[int]] = None  # list of 1–5, or None to clear
 
 
+class TaskDayHoursUpdate(BaseModel):
+    task_id: str
+    person_id: str
+    week_number: int
+    day_hours: Optional[dict] = None  # {str(day_of_week): hours} or None to clear
+
+
 class TaskWeekSettingsUpdate(BaseModel):
     week_number: int  # 1–4
     weekly_hours_target: float
@@ -88,6 +95,11 @@ class AbsenceRangeCreate(BaseModel):
     end_date: date
     type: Literal["sick", "vacation"]
     reported_by: Optional[str] = None
+
+
+class CompanyHolidayCreate(BaseModel):
+    date: date
+    name: Optional[str] = None
 
 
 class ReallocationCreate(BaseModel):

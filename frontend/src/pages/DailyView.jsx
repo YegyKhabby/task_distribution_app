@@ -31,6 +31,11 @@ function exportDayExcel(data, dateStr) {
   const ws = {}
   const ncols = 2 + personNames.length + 1
   let row = 0
+  const addr = (r, c) => XLSX.utils.encode_cell({ r, c })
+  const col = (c) => XLSX.utils.encode_col(c)
+  const setFormula = (r, c, formula, s) => {
+    ws[addr(r, c)] = { t: 'n', f: formula, s: s || {} }
+  }
 
   // Header row
   const header = ['Task', 'Responsible', ...personNames, 'Total']
@@ -68,25 +73,26 @@ function exportDayExcel(data, dateStr) {
       const hrs = personHours[pname]
       if (hrs != null) ws[XLSX.utils.encode_cell({ r: row, c: 2 + ci })] = { v: hrs, t: 'n', s: numStyle }
     })
-    ws[XLSX.utils.encode_cell({ r: row, c: 2 + personNames.length })] = { v: t.total_hours, t: 'n', s: boldStyle }
+    const startCol = 2
+    const endCol = 1 + personNames.length
+    if (personNames.length > 0) {
+      setFormula(row, 2 + personNames.length, `SUM(${col(startCol)}${row + 1}:${col(endCol)}${row + 1})`, boldStyle)
+    } else {
+      ws[XLSX.utils.encode_cell({ r: row, c: 2 + personNames.length })] = { v: '', t: 's', s: boldStyle }
+    }
     row++
   }
 
   // Totals row
-  const personTotals = {}
-  for (const t of data.tasks) {
-    for (const p of t.people) {
-      personTotals[p.person_name] = (personTotals[p.person_name] || 0) + p.hours
-    }
-  }
-  const grandTotal = Object.values(personTotals).reduce((s, h) => s + h, 0)
   const totalRowStyle = { font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: 'F1F5F9' } }, alignment: { horizontal: 'center', vertical: 'center' } }
   ws[XLSX.utils.encode_cell({ r: row, c: 0 })] = { v: 'Total', t: 's', s: { ...totalRowStyle, alignment: { vertical: 'center' } } }
   ws[XLSX.utils.encode_cell({ r: row, c: 1 })] = { v: '', t: 's', s: totalRowStyle }
-  personNames.forEach((pname, ci) => {
-    ws[XLSX.utils.encode_cell({ r: row, c: 2 + ci })] = { v: personTotals[pname] || 0, t: 'n', s: totalRowStyle }
-  })
-  ws[XLSX.utils.encode_cell({ r: row, c: 2 + personNames.length })] = { v: grandTotal, t: 'n', s: totalRowStyle }
+  personNames.forEach((pname, ci) => setFormula(row, 2 + ci, `SUM(${col(2 + ci)}3:${col(2 + ci)}${row})`, totalRowStyle))
+  if (personNames.length > 0) {
+    setFormula(row, 2 + personNames.length, `SUM(${col(2)}${row + 1}:${col(1 + personNames.length)}${row + 1})`, totalRowStyle)
+  } else {
+    ws[XLSX.utils.encode_cell({ r: row, c: 2 + personNames.length })] = { v: '', t: 's', s: totalRowStyle }
+  }
   row++
 
   // Absent footer

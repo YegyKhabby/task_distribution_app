@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
-import { formatLocalDate } from '../utils/dates'
+import { formatLocalDate, nextMondayDateString } from '../utils/dates'
 
 const DAY_ABBR = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
 
@@ -24,14 +24,26 @@ function merge(styles) {
 function exportCalendarExcel(data) {
   const { year, month, month_name, cur_first, section_a, section_b, groups, people, allocations, task_colors } = data
   const all_days = [...section_a, ...section_b]
-  const ncols = 3 + all_days.length
+  const weekColumns = groups.flatMap((g, groupIndex) => {
+    const dayCols = all_days
+      .slice(g.start_idx, g.end_idx + 1)
+      .map((day) => ({ type: 'day', date: day, groupIndex, color: g.color }))
+    return [...dayCols, { type: 'week_total', label: `${g.label} Total`, groupIndex, color: g.color }]
+  })
+  const ncols = 2 + weekColumns.length + 1
 
   const WS = {}
   const merges = []
   let row = 0
+  const addr = (r, c) => XLSX.utils.encode_cell({ r, c })
+  const col = (c) => XLSX.utils.encode_col(c)
 
   function setCell(r, c, v, t, s) {
-    WS[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} }
+    WS[addr(r, c)] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} }
+  }
+
+  function setFormula(r, c, formula, s) {
+    WS[addr(r, c)] = { t: 'n', f: formula, s: s || {} }
   }
 
   // Row 0: Title
@@ -48,8 +60,11 @@ function exportCalendarExcel(data) {
   const DAY_H_STYLE = { fill: { fgColor: { rgb: '374151' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } }
   setCell(row, 0, 'Person', 's', DAY_H_STYLE)
   setCell(row, 1, 'Task',   's', DAY_H_STYLE)
+  let cursorCol = 2
   for (const g of groups) {
-    const c1 = 2 + g.start_idx, c2 = 2 + g.end_idx
+    const width = (g.end_idx - g.start_idx + 1) + 1
+    const c1 = cursorCol
+    const c2 = cursorCol + width - 1
     setCell(row, c1, g.label, 's', {
       fill: { fgColor: { rgb: g.color } },
       font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
@@ -57,23 +72,30 @@ function exportCalendarExcel(data) {
     })
     if (c1 < c2) merges.push({ s: { r: row, c: c1 }, e: { r: row, c: c2 } })
     for (let c = c1 + 1; c <= c2; c++) setCell(row, c, '', 's', sf(g.color))
+    cursorCol = c2 + 1
   }
   setCell(row, ncols - 1, 'Total', 's', DAY_H_STYLE)
   row++
 
-  // Row 2: Day headers
+  // Row 2: Day / week total headers
   setCell(row, 0, '', 's', sf('374151'))
   setCell(row, 1, '', 's', sf('374151'))
-  for (let i = 0; i < all_days.length; i++) {
-    const d = new Date(all_days[i] + 'T00:00:00')
-    const g = groups.find(g => i >= g.start_idx && i <= g.end_idx)
-    const bgColor = g ? g.color : '374151'
-    setCell(row, 2 + i, `${DAY_ABBR[d.getDay() === 0 ? 6 : d.getDay()-1]}  ${d.getDate()}`, 's', {
-      fill: { fgColor: { rgb: bgColor } },
+  weekColumns.forEach((entry, idx) => {
+    if (entry.type === 'day') {
+      const d = new Date(entry.date + 'T00:00:00')
+      setCell(row, 2 + idx, `${DAY_ABBR[d.getDay() === 0 ? 6 : d.getDay()-1]}  ${d.getDate()}`, 's', {
+        fill: { fgColor: { rgb: entry.color } },
+        font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9 },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      })
+      return
+    }
+    setCell(row, 2 + idx, 'Week Total', 's', {
+      fill: { fgColor: { rgb: entry.color } },
       font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9 },
       alignment: { horizontal: 'center', vertical: 'center' },
     })
-  }
+  })
   setCell(row, ncols - 1, 'Total', 's', { fill: { fgColor: { rgb: '374151' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 9 }, alignment: { horizontal: 'center', vertical: 'center' } })
   row++
 
@@ -94,12 +116,13 @@ function exportCalendarExcel(data) {
     }
 
     const pStartRow = row
-    const nRows = Math.max(taskNames.length, 1)
+    const hasTasks = taskNames.length > 0
+    const taskRowsCount = Math.max(taskNames.length, 1)
 
-    if (taskNames.length === 0) {
+    if (!hasTasks) {
       setCell(row, 0, '', 's', sf('EEF2FF'))
       setCell(row, 1, '—', 's', sf('F9FAFB'))
-      for (let i = 0; i < all_days.length; i++) setCell(row, 2+i, '', 's', sf('F9FAFB'))
+      weekColumns.forEach((_, i) => setCell(row, 2 + i, '', 's', sf('F9FAFB')))
       setCell(row, ncols - 1, '', 's', sf('F9FAFB'))
       row++
     } else {
@@ -117,42 +140,103 @@ function exportCalendarExcel(data) {
           alignment: { horizontal: 'left', vertical: 'center' },
         })
 
-        let taskDayTotal = 0
-        for (let i = 0; i < all_days.length; i++) {
-          const d = all_days[i]
-          const td = day_alloc[d]
-          const isCurrentMonth = d >= cur_first
-          let cellStyle
-
-          if (td === 'absent') {
-            cellStyle = ti === 0
-              ? merge([sf('FEE2E2'), fc('991B1B', 9, true)])
-              : sf('FEE2E2')
-            setCell(row, 2+i, ti === 0 ? 'ABS' : '', 's', { ...cellStyle, alignment: { horizontal: 'center', vertical: 'center' } })
-          } else if (td && typeof td === 'object' && td[tname] != null) {
-            taskDayTotal += td[tname]
-            const bg = isCurrentMonth ? taskVlt : lighten(tc || 'A78BFA', 0.88)
-            setCell(row, 2+i, td[tname], 'n', {
-              fill: { fgColor: { rgb: bg } },
-              font: { color: { rgb: tcFont }, sz: 9 },
+        const weekTotalCols = []
+        const countedWeekTotalCols = []
+        let dayColCursor = 2
+        groups.forEach((g) => {
+          const dayColsForWeek = []
+          for (let i = g.start_idx; i <= g.end_idx; i++) {
+            const d = all_days[i]
+            const td = day_alloc[d]
+            const isCurrentMonth = d >= cur_first
+            if (td === 'absent') {
+              const cellStyle = ti === 0
+                ? merge([sf('FEE2E2'), fc('991B1B', 9, true)])
+                : sf('FEE2E2')
+              setCell(row, dayColCursor, ti === 0 ? 'ABS' : '', 's', { ...cellStyle, alignment: { horizontal: 'center', vertical: 'center' } })
+            } else if (td && typeof td === 'object' && td[tname] != null) {
+              const bg = isCurrentMonth ? taskVlt : lighten(tc || 'A78BFA', 0.88)
+              setCell(row, dayColCursor, td[tname], 'n', {
+                fill: { fgColor: { rgb: bg } },
+                font: { color: { rgb: tcFont }, sz: 9 },
+                alignment: { horizontal: 'center', vertical: 'center' },
+              })
+              dayColsForWeek.push(dayColCursor)
+            } else {
+              setCell(row, dayColCursor, '', 's', sf(isCurrentMonth ? 'F9FAFB' : 'F5F3FF'))
+            }
+            dayColCursor++
+          }
+          if (dayColsForWeek.length > 0) {
+            setFormula(row, dayColCursor, `SUM(${col(dayColsForWeek[0])}${row + 1}:${col(dayColsForWeek[dayColsForWeek.length - 1])}${row + 1})`, {
+              fill: { fgColor: { rgb: taskVlt } },
+              font: { bold: true, color: { rgb: tcFont }, sz: 9 },
               alignment: { horizontal: 'center', vertical: 'center' },
             })
           } else {
-            setCell(row, 2+i, '', 's', sf(isCurrentMonth ? 'F9FAFB' : 'F5F3FF'))
+            setCell(row, dayColCursor, '', 's', sf('FFFFFF'))
           }
-        }
-        setCell(row, ncols - 1, taskDayTotal > 0 ? taskDayTotal : '', taskDayTotal > 0 ? 'n' : 's', {
-          fill: { fgColor: { rgb: taskVlt } },
-          font: { bold: true, color: { rgb: tcFont }, sz: 9 },
-          alignment: { horizontal: 'center', vertical: 'center' },
+          weekTotalCols.push(dayColCursor)
+          if (g.label !== 'Prev Month') countedWeekTotalCols.push(dayColCursor)
+          dayColCursor++
         })
+        if (countedWeekTotalCols.length > 0) {
+          setFormula(row, ncols - 1, `SUM(${countedWeekTotalCols.map((c) => `${col(c)}${row + 1}`).join(',')})`, {
+            fill: { fgColor: { rgb: taskVlt } },
+            font: { bold: true, color: { rgb: tcFont }, sz: 9 },
+            alignment: { horizontal: 'center', vertical: 'center' },
+          })
+        } else {
+          setCell(row, ncols - 1, '', 's', sf('FFFFFF'))
+        }
         row++
       }
     }
 
-    // Merge person name cell vertically
-    if (nRows > 1) merges.push({ s: { r: pStartRow, c: 0 }, e: { r: pStartRow + nRows - 1, c: 0 } })
-    WS[XLSX.utils.encode_cell({ r: pStartRow, c: 0 })] = {
+    const pTotalRow = row
+    setCell(pTotalRow, 0, '', 's', sf('EEF2FF'))
+    setCell(pTotalRow, 1, 'Person Total', 's', {
+      fill: { fgColor: { rgb: 'F0FDF4' } },
+      font: { bold: true, color: { rgb: '166534' }, sz: 9 },
+      alignment: { horizontal: 'left', vertical: 'center' },
+    })
+    let weekColCursor = 2
+    const personWeekTotalCols = []
+    const countedPersonWeekTotalCols = []
+    groups.forEach((g) => {
+      const groupDayCols = []
+      for (let i = g.start_idx; i <= g.end_idx; i++) {
+        setFormula(pTotalRow, weekColCursor, `SUM(${col(weekColCursor)}${pStartRow + 1}:${col(weekColCursor)}${pTotalRow})`, {
+          fill: { fgColor: { rgb: 'F0FDF4' } },
+          font: { bold: true, color: { rgb: '166534' }, sz: 9 },
+          alignment: { horizontal: 'center', vertical: 'center' },
+        })
+        groupDayCols.push(weekColCursor)
+        weekColCursor++
+      }
+      setFormula(pTotalRow, weekColCursor, `SUM(${col(groupDayCols[0])}${pTotalRow + 1}:${col(groupDayCols[groupDayCols.length - 1])}${pTotalRow + 1})`, {
+        fill: { fgColor: { rgb: 'DCFCE7' } },
+        font: { bold: true, color: { rgb: '166534' }, sz: 9 },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      })
+      personWeekTotalCols.push(weekColCursor)
+      if (g.label !== 'Prev Month') countedPersonWeekTotalCols.push(weekColCursor)
+      weekColCursor++
+    })
+    if (countedPersonWeekTotalCols.length > 0) {
+      setFormula(pTotalRow, ncols - 1, `SUM(${countedPersonWeekTotalCols.map((c) => `${col(c)}${pTotalRow + 1}`).join(',')})`, {
+        fill: { fgColor: { rgb: 'DCFCE7' } },
+        font: { bold: true, color: { rgb: '166534' }, sz: 9 },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      })
+    } else {
+      setCell(pTotalRow, ncols - 1, '', 's', sf('DCFCE7'))
+    }
+    row++
+
+    // Merge person name cell vertically including total row
+    merges.push({ s: { r: pStartRow, c: 0 }, e: { r: pTotalRow, c: 0 } })
+    WS[addr(pStartRow, 0)] = {
       v: person.name, t: 's',
       s: { fill: { fgColor: { rgb: 'EEF2FF' } }, font: { bold: true, sz: 10, color: { rgb: '312E81' } }, alignment: { horizontal: 'left', vertical: 'top' } },
     }
@@ -162,30 +246,28 @@ function exportCalendarExcel(data) {
   const totRow = row
   setCell(totRow, 0, 'Total', 's', { fill: { fgColor: { rgb: 'F0FDF4' } }, font: { bold: true, color: { rgb: '166534' } }, alignment: { horizontal: 'left', vertical: 'center' } })
   setCell(totRow, 1, '', 's', sf('F0FDF4'))
-  let grandDayTotal = 0
-  for (let i = 0; i < all_days.length; i++) {
-    const d = all_days[i]
-    let total = 0
-    for (const person of people) {
-      const td = (allocations[person.id] || {})[d]
-      if (td && typeof td === 'object') total += Object.values(td).reduce((a,b) => a+b, 0)
-    }
-    grandDayTotal += total
-    setCell(totRow, 2+i, total > 0 ? total : '', total > 0 ? 'n' : 's', {
+  const grandWeekCols = []
+  weekColumns.forEach((entry, idx) => {
+    setFormula(totRow, 2 + idx, `SUM(${col(2 + idx)}4:${col(2 + idx)}${totRow})`, {
+      fill: { fgColor: { rgb: entry.type === 'week_total' ? 'DCFCE7' : 'F0FDF4' } },
+      font: { bold: true, sz: 9, color: { rgb: '166534' } },
+      alignment: { horizontal: 'center', vertical: 'center' },
+    })
+    if (entry.type === 'week_total' && groups[entry.groupIndex]?.label !== 'Prev Month') grandWeekCols.push(2 + idx)
+  })
+  if (grandWeekCols.length > 0) {
+    setFormula(totRow, ncols - 1, `SUM(${grandWeekCols.map((c) => `${col(c)}${totRow + 1}`).join(',')})`, {
       fill: { fgColor: { rgb: 'F0FDF4' } },
       font: { bold: true, sz: 9, color: { rgb: '166534' } },
       alignment: { horizontal: 'center', vertical: 'center' },
     })
+  } else {
+    setCell(totRow, ncols - 1, '', 's', sf('F0FDF4'))
   }
-  setCell(totRow, ncols - 1, grandDayTotal > 0 ? grandDayTotal : '', grandDayTotal > 0 ? 'n' : 's', {
-    fill: { fgColor: { rgb: 'F0FDF4' } },
-    font: { bold: true, sz: 9, color: { rgb: '166534' } },
-    alignment: { horizontal: 'center', vertical: 'center' },
-  })
 
   WS['!ref'] = XLSX.utils.encode_range({ s: { r:0, c:0 }, e: { r: totRow, c: ncols-1 } })
   WS['!merges'] = merges
-  WS['!cols'] = [{ wch: 14 }, { wch: 22 }, ...all_days.map(() => ({ wch: 7 })), { wch: 8 }]
+  WS['!cols'] = [{ wch: 14 }, { wch: 22 }, ...weekColumns.map((entry) => ({ wch: entry.type === 'week_total' ? 10 : 7 })), { wch: 10 }]
   WS['!freeze'] = { xSplit: 2, ySplit: 3 }
 
   const wb = XLSX.utils.book_new()
@@ -300,7 +382,9 @@ export default function Calendar() {
   const [error, setError] = useState(null)
   const [fromWeek, setFromWeek] = useState(1)
   const [showRedistribute, setShowRedistribute] = useState(false)
-  const [pendingFromWeek, setPendingFromWeek] = useState(1)
+  const [effectiveFrom, setEffectiveFrom] = useState(nextMondayDateString())
+  const [confirmingDistribution, setConfirmingDistribution] = useState(false)
+  const [saveMessage, setSaveMessage] = useState('')
   const [weekStart, setWeekStart] = useState(() => {
     const now = new Date()
     const key = `week_start_${now.getFullYear()}_${now.getMonth() + 1}`
@@ -317,7 +401,11 @@ export default function Calendar() {
     api.getPeople(formatLocalDate(new Date(year, month - 1, 1))).then(all => {
       const active = all.filter(p => p.active !== false)
       setPeople(active)
-      if (active.length > 0) setPersonId(active[0].id)
+      setPersonId((current) => (
+        current && active.some((p) => p.id === current)
+          ? current
+          : (active[0]?.id || '')
+      ))
     }).catch(() => {})
   }, [year, month])
 
@@ -455,48 +543,64 @@ export default function Calendar() {
           {exporting ? 'Preparing…' : 'Download Excel'}
         </button>
         <button
-          onClick={() => { setPendingFromWeek(fromWeek); setShowRedistribute(true) }}
+          onClick={() => {
+            setEffectiveFrom(nextMondayDateString())
+            setSaveMessage('')
+            setShowRedistribute(true)
+          }}
           className="px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
         >
-          Redistribute
+          Redistribute & Save
         </button>
       </div>
 
       {showRedistribute && (
         <div className="mb-5 p-4 border border-indigo-200 bg-indigo-50 rounded-lg flex flex-wrap items-center gap-3">
-          <span className="text-sm font-medium text-indigo-800">Apply rules from week:</span>
-          <div className="flex gap-1">
-            {[1, 2, 3, 4].map(w => (
-              <button
-                key={w}
-                onClick={() => setPendingFromWeek(w)}
-                className={`w-9 h-9 rounded-md text-sm font-semibold border transition-colors ${
-                  pendingFromWeek === w
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'bg-white text-gray-700 border-gray-300 hover:border-indigo-400'
-                }`}
-              >
-                {w}
-              </button>
-            ))}
-          </div>
+          <span className="text-sm font-medium text-indigo-800">Apply this new calendar from Monday:</span>
+          <input
+            type="date"
+            value={effectiveFrom}
+            onChange={(e) => setEffectiveFrom(e.target.value)}
+            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          />
           <span className="text-xs text-indigo-600">
-            Weeks 1–{pendingFromWeek - 1} keep proportional distribution
+            Earlier weeks stay unchanged. The new distribution starts on this Monday and continues into later months until another version replaces it.
           </span>
           <div className="flex gap-2 ml-auto">
             <button
-              onClick={() => setShowRedistribute(false)}
+              onClick={() => { setShowRedistribute(false); setSaveMessage('') }}
               className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-md"
             >
               Cancel
             </button>
             <button
-              onClick={() => { setFromWeek(pendingFromWeek); setShowRedistribute(false) }}
-              className="px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+              onClick={async () => {
+                setConfirmingDistribution(true)
+                setError(null)
+                setSaveMessage('')
+                try {
+                  const result = await api.confirmDistribution(1, effectiveFrom, null, false)
+                  localStorage.removeItem('dist_stale')
+                  setDistStale(false)
+                  setFromWeek(1)
+                  const data = await api.getCalendar(year, month, personId, 1, weekStart, includeOverflow)
+                  setCalData(data)
+                  setSaveMessage(`${result.saved} rows saved from ${result.effective_from}.`)
+                } catch (e) {
+                  setError(e.message)
+                } finally {
+                  setConfirmingDistribution(false)
+                }
+              }}
+              disabled={confirmingDistribution || !effectiveFrom}
+              className="px-3 py-1.5 text-sm font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:opacity-50"
             >
-              Apply
+              {confirmingDistribution ? 'Saving…' : 'Save all weeks'}
             </button>
           </div>
+          {saveMessage && (
+            <span className="w-full text-sm font-medium text-emerald-700">{saveMessage}</span>
+          )}
         </div>
       )}
 

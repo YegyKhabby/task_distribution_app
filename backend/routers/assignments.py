@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from database import supabase
-from models import TaskPersonAssign, TaskFixedHours
+from models import TaskPersonAssign, TaskFixedHours, TaskDayHoursUpdate
 
 router = APIRouter(prefix="/assignments", tags=["assignments"])
 
@@ -52,3 +52,13 @@ def set_fixed_hours(body: TaskFixedHours):
         body.model_dump(), on_conflict="task_id,person_id,week_number"
     ).execute()
     return res.data[0]
+
+
+# ── Day hours ─────────────────────────────────────────────────────────────────
+
+@router.put("/day-hours")
+def set_day_hours(body: TaskDayHoursUpdate):
+    supabase.table("task_people").update(
+        {"day_hours": body.day_hours}
+    ).eq("task_id", body.task_id).eq("person_id", body.person_id).eq("week_number", body.week_number).execute()
+    return {"ok": True}

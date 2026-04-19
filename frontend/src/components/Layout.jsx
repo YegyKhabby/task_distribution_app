@@ -10,7 +10,6 @@ const NAV = [
   { to: '/calendar',  label: 'Calendar' },
   { to: '/actual',    label: 'Actual' },
   { to: '/daily',     label: 'Daily View' },
-  { to: '/deskbird-attendance', label: 'Deskbird/Attendance' },
 ]
 
 export default function Layout({ children }) {

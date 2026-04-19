@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.taskdist.deskbird-email</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/Users/yeganehkhabbazian/Projects/task-distribution-app/backend/venv/bin/python</string>
+      <string>/Users/yeganehkhabbazian/Projects/task-distribution-app/tools/run_deskbird_schedule.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/yeganehkhabbazian/Projects/task-distribution-app</string>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/taskdist_deskbird_email.out</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/taskdist_deskbird_email.err</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+  </dict>
+</plist>

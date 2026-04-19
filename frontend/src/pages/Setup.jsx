@@ -13,17 +13,16 @@ function exportScheduleExcel(personName, schedule, futureVersion) {
   function buildSheet(sched, sheetLabel) {
     const ws = {}
     const setCell = (r, c, v, t, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} } }
+    const setFormula = (r, c, formula, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { t: 'n', f: formula, s: s || {} } }
     setCell(0, 0, `${personName} — ${sheetLabel}`, 's', { fill: { fgColor: { rgb: '312E81' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 12 }, alignment: { horizontal: 'left', vertical: 'center' } })
     setCell(0, 1, '', 's', { fill: { fgColor: { rgb: '312E81' } } })
     setCell(0, 2, '', 's', { fill: { fgColor: { rgb: '312E81' } } })
     setCell(1, 0, 'Day', 's', { ...HDR, alignment: { horizontal: 'left', vertical: 'center' } })
     setCell(1, 1, 'Hours', 's', HDR)
     setCell(1, 2, 'Location', 's', HDR)
-    let totalHrs = 0
     let row = 2
     for (const entry of sched.filter(d => d.checked && Number(d.hours) > 0)) {
       const hrs = Number(entry.hours)
-      totalHrs += hrs
       setCell(row, 0, SCHED_DAY_LABELS[entry.day] || '', 's', { alignment: { horizontal: 'left', vertical: 'center' }, font: { sz: 10 } })
       setCell(row, 1, hrs, 'n', {
         fill: { fgColor: { rgb: entry.location === 'home' ? 'CCFBF1' : 'E0E7FF' } },
@@ -34,7 +33,8 @@ function exportScheduleExcel(personName, schedule, futureVersion) {
       row++
     }
     setCell(row, 0, 'Total', 's', { ...TOT, alignment: { horizontal: 'left', vertical: 'center' } })
-    setCell(row, 1, totalHrs, 'n', TOT)
+    if (row > 2) setFormula(row, 1, `SUM(B3:B${row})`, TOT)
+    else setCell(row, 1, '', 's', TOT)
     setCell(row, 2, 'hrs/week', 's', TOT)
     ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: row, c: 2 } })
     ws['!cols'] = [{ wch: 14 }, { wch: 8 }, { wch: 10 }]

@@ -11,6 +11,8 @@ function exportMatrixExcel(people, tasks, distMap, weekNumber) {
   const ws = {}
   const ncols = 2 + activeTasks.length  // Person, tasks..., Total
   const setCell = (r, c, v, t, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} } }
+  const setFormula = (r, c, formula, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { t: 'n', f: formula, s: s || {} } }
+  const col = (c) => XLSX.utils.encode_col(c)
 
   // Header row
   setCell(0, 0, 'Person', 's', { ...HDR, alignment: { horizontal: 'left', vertical: 'center' } })
@@ -18,8 +20,6 @@ function exportMatrixExcel(people, tasks, distMap, weekNumber) {
   setCell(0, ncols - 1, 'Total', 's', HDR)
 
   // Person rows
-  const taskColTotals = new Array(activeTasks.length).fill(0)
-  let grandTotal = 0
   for (let ri = 0; ri < people.length; ri++) {
     const p = people[ri]
     const pDist = distMap[p.id] || {}
@@ -28,22 +28,22 @@ function exportMatrixExcel(people, tasks, distMap, weekNumber) {
     setCell(ri + 1, 0, p.name, 's', { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } })
     activeTasks.forEach((t, i) => {
       const hrs = pDist[t.id] || 0
-      taskColTotals[i] += hrs
       const colorHex = (t.color || '').replace('#', '')
       const cellStyle = hrs > 0 && colorHex
         ? { fill: { fgColor: { rgb: colorHex } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
         : { ...NUM, fill: { fgColor: { rgb: bg } } }
       setCell(ri + 1, 1 + i, hrs > 0 ? hrs : '', hrs > 0 ? 'n' : 's', cellStyle)
     })
-    setCell(ri + 1, ncols - 1, pTotal > 0 ? pTotal : '', pTotal > 0 ? 'n' : 's', { ...NUM, font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: bg } } })
-    grandTotal += pTotal
+    if (activeTasks.length > 0) setFormula(ri + 1, ncols - 1, `SUM(B${ri + 2}:${col(ncols - 2)}${ri + 2})`, { ...NUM, font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: bg } } })
+    else setCell(ri + 1, ncols - 1, '', 's', { ...NUM, font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: bg } } })
   }
 
   // Totals row
   const totRow = people.length + 1
   setCell(totRow, 0, 'Total', 's', { ...TOT, alignment: { horizontal: 'left', vertical: 'center' } })
-  activeTasks.forEach((t, i) => setCell(totRow, 1 + i, taskColTotals[i] > 0 ? taskColTotals[i] : '', taskColTotals[i] > 0 ? 'n' : 's', TOT))
-  setCell(totRow, ncols - 1, grandTotal, 'n', TOT)
+  activeTasks.forEach((t, i) => setFormula(totRow, 1 + i, `SUM(${col(1 + i)}2:${col(1 + i)}${totRow})`, TOT))
+  if (activeTasks.length > 0) setFormula(totRow, ncols - 1, `SUM(B${totRow + 1}:${col(ncols - 2)}${totRow + 1})`, TOT)
+  else setCell(totRow, ncols - 1, '', 's', TOT)
 
   ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totRow, c: ncols - 1 } })
   ws['!cols'] = [{ wch: 16 }, ...activeTasks.map(t => ({ wch: Math.max(10, Math.min(20, t.name.length)) })), { wch: 8 }]

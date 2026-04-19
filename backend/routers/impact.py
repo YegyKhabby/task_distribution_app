@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, HTTPException
 from database import supabase
 from datetime import date, timedelta
 from collections import defaultdict
 from routers.calendar import distribute_week
 from utils.versioned import active_schedule_rows, active_distribution_rows
+from models import CompanyHolidayCreate
 
 router = APIRouter(prefix="/impact", tags=["impact"])
+HOLIDAY_PREFIX = "holiday:"
 
 
 def week_dates(week_start: date):
@@ -32,6 +34,17 @@ def get_monday(d: date) -> date:
     return d - timedelta(days=d.weekday())
 
 
+def holiday_marker(name: str | None) -> str:
+    clean = (name or "Public holiday").strip()
+    return f"{HOLIDAY_PREFIX}{clean}"
+
+
+def holiday_name(reported_by: str | None) -> str:
+    if not reported_by or not reported_by.startswith(HOLIDAY_PREFIX):
+        return ""
+    return reported_by[len(HOLIDAY_PREFIX):] or "Public holiday"
+
+
 def compute_week_impact(week_start: date, person_ids: set = None, week_start_offset: int = 1) -> dict:
     """
     Compute unallocated hours and coverage options for a given week.
@@ -45,7 +58,7 @@ def compute_week_impact(week_start: date, person_ids: set = None, week_start_off
         "*, people(id, name)"
     ).gte("date", str(week_start)).lte("date", str(week_end)).execute()
 
-    absences = absences_res.data
+    absences = [a for a in absences_res.data if not (a.get("reported_by") or "").startswith(HOLIDAY_PREFIX)]
 
     # Group absence days by person
     absent_people: dict[str, dict] = {}
@@ -251,9 +264,9 @@ def get_impact_upcoming(from_date: str, week_start_offset: int = Query(default=1
 
     # 1. Fetch all absences >= from_date
     absences_res = supabase.table("absences").select(
-        "person_id, date, people(id, name)"
+        "person_id, date, reported_by, people(id, name)"
     ).gte("date", from_date).execute()
-    absences = absences_res.data
+    absences = [a for a in absences_res.data if not (a.get("reported_by") or "").startswith(HOLIDAY_PREFIX)]
 
     if not absences:
         return {"persons": []}
@@ -302,6 +315,58 @@ def get_impact_upcoming(from_date: str, week_start_offset: int = Query(default=1
             })
 
     return {"persons": list(persons_data.values())}
+
+
+@router.get("/holidays")
+def list_holidays(from_date: str = Query(None)):
+    q = supabase.table("absences").select("date, reported_by").like("reported_by", f"{HOLIDAY_PREFIX}%").order("date")
+    if from_date:
+        q = q.gte("date", from_date)
+    rows = q.execute().data
+
+    grouped = {}
+    for row in rows:
+        key = (row["date"], row.get("reported_by") or "")
+        if key not in grouped:
+            grouped[key] = {
+                "date": row["date"],
+                "name": holiday_name(row.get("reported_by")),
+            }
+    return list(grouped.values())
+
+
+@router.post("/holiday", status_code=201)
+def create_holiday(body: CompanyHolidayCreate):
+    if body.date.weekday() >= 5:
+        raise HTTPException(400, "Holiday date must be a weekday to affect the work week")
+
+    marker = holiday_marker(body.name)
+    date_str = str(body.date)
+    people = supabase.table("people").select("id").eq("active", True).execute().data
+    person_ids = [p["id"] for p in people]
+    if not person_ids:
+        return {"created": 0, "date": date_str, "name": holiday_name(marker)}
+
+    existing = supabase.table("absences").select("person_id").eq("date", date_str).in_("person_id", person_ids).execute().data
+    existing_ids = {r["person_id"] for r in existing}
+
+    rows = [{
+        "person_id": pid,
+        "date": date_str,
+        "type": "vacation",
+        "reported_by": marker,
+    } for pid in person_ids if pid not in existing_ids]
+
+    if rows:
+        supabase.table("absences").insert(rows).execute()
+
+    return {"created": len(rows), "date": date_str, "name": holiday_name(marker)}
+
+
+@router.delete("/holiday")
+def delete_holiday(date_str: str = Query(..., alias="date")):
+    supabase.table("absences").delete().eq("date", date_str).like("reported_by", f"{HOLIDAY_PREFIX}%").execute()
+    return {"ok": True}
 
 
 @router.get("/{week_start_str}")

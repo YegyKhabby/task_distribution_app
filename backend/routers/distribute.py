@@ -5,6 +5,9 @@ from collections import defaultdict
 from datetime import date, timedelta
 from utils.versioned import active_schedule_rows, next_monday
 from typing import Optional
+from routers.calendar import distribute_week, holiday_dates_from_absence_rows, holiday_dows_for_week
+import time
+import httpx
 
 router = APIRouter(prefix="/distribute", tags=["distribute"])
 
@@ -13,27 +16,50 @@ def round_half(val: float) -> float:
     return round(val * 2) / 2
 
 
+def supabase_query(fn, max_attempts: int = 3, base_delay: float = 0.3):
+    """Run a Supabase query, retrying on transient network errors (httpx.ReadError / EAGAIN)."""
+    last_exc = None
+    for attempt in range(max_attempts):
+        try:
+            return fn()
+        except httpx.ReadError as e:
+            last_exc = e
+            if attempt < max_attempts - 1:
+                time.sleep(base_delay * (attempt + 1))
+        except httpx.TransportError as e:
+            last_exc = e
+            if attempt < max_attempts - 1:
+                time.sleep(base_delay * (attempt + 1))
+    raise last_exc
+
+
 def fetch_all(week_number: int, week_start_date: date):
     week_start_str = str(week_start_date)
-    people_raw = supabase.table("people").select(
+    week_end_str = str(week_start_date + timedelta(days=4))
+    holiday_rows = supabase_query(lambda: supabase.table("absences").select("date, reported_by").gte("date", week_start_str).lte("date", week_end_str).execute().data)
+    holiday_dows = holiday_dows_for_week(week_start_date, holiday_dates_from_absence_rows(holiday_rows))
+    people_raw = supabase_query(lambda: supabase.table("people").select(
         "*, person_schedule(day_of_week, hours, valid_from, valid_until)"
-    ).eq("active", True).execute().data
+    ).eq("active", True).execute().data)
     # Filter each person's schedule to the version active for week_start_date
     for p in people_raw:
         rows = p.get("person_schedule") or []
         for r in rows:
             r["person_id"] = p["id"]
-        p["person_schedule"] = active_schedule_rows(rows, week_start_str)
-    tasks = supabase.table("tasks").select("*").execute().data
-    week_settings = supabase.table("task_week_settings").select("task_id, weekly_hours_target").eq("week_number", week_number).execute().data
+        p["person_schedule"] = [
+            r for r in active_schedule_rows(rows, week_start_str)
+            if r["day_of_week"] not in holiday_dows
+        ]
+    tasks = supabase_query(lambda: supabase.table("tasks").select("*").execute().data)
+    week_settings = supabase_query(lambda: supabase.table("task_week_settings").select("task_id, weekly_hours_target").eq("week_number", week_number).execute().data)
     settings_by_task = {row["task_id"]: row for row in week_settings}
     for task in tasks:
         override = settings_by_task.get(task["id"])
         if override:
             task["weekly_hours_target"] = override["weekly_hours_target"]
-    assignments = supabase.table("task_people").select("task_id, person_id").eq("week_number", week_number).execute().data
-    fixed = supabase.table("task_fixed_hours").select("task_id, person_id, hours").eq("week_number", week_number).execute().data
-    return people_raw, tasks, assignments, fixed
+    assignments = supabase_query(lambda: supabase.table("task_people").select("task_id, person_id").eq("week_number", week_number).execute().data)
+    fixed = supabase_query(lambda: supabase.table("task_fixed_hours").select("task_id, person_id, hours").eq("week_number", week_number).execute().data)
+    return people_raw, tasks, assignments, fixed, holiday_dows
 
 
 def compute_weekly_hours(person):
@@ -133,9 +159,12 @@ def iterative_solve(task_needs, task_auto_pids, person_caps):
 def compute_preview(week_number: int, week_start_date: date = None):
     if week_start_date is None:
         week_start_date = next_monday(date.today())
-    people, tasks, assignments, fixed_rows = fetch_all(week_number, week_start_date)
+    people, tasks, assignments, fixed_rows, holiday_dows = fetch_all(week_number, week_start_date)
 
     person_map = {p["id"]: p for p in people}
+
+    # Drop assignments for deactivated people (person_map only contains active people)
+    assignments = [a for a in assignments if a["person_id"] in person_map]
 
     task_assigned: dict[str, set] = defaultdict(set)
     for a in assignments:
@@ -231,9 +260,12 @@ def compute_preview(week_number: int, week_start_date: date = None):
     for task in sorted(normal_tasks, key=lambda t: t.get("priority") or 999):
         tid = task["id"]
         assigned = task_assigned.get(tid, set())
+        auto_pids = [p for p in assigned if (tid, p) not in fixed_map]
 
         distributions = []
         for pid in assigned:
+            if pid not in person_map:
+                continue  # person deactivated but still has assignments
             if (tid, pid) in fixed_map:
                 hrs = fixed_map[(tid, pid)]
                 p = person_map[pid]
@@ -254,8 +286,19 @@ def compute_preview(week_number: int, week_start_date: date = None):
         gap = round_half(abs(total_dist - target))
 
         task_warning = None
+        task_warning_reason = None
         if gap >= 0.5:
-            task_warning = f"{gap}h short — not enough capacity. Assign more people or reduce target."
+            if not assigned:
+                task_warning_reason = "No people are assigned to this task in this week."
+            elif not auto_pids and task_fixed_totals[tid] < target:
+                task_warning_reason = "This task only has fixed-hour assignments, and those fixed hours do not cover the weekly target."
+            elif auto_pids and sum(person_auto_caps.get(pid, 0) for pid in auto_pids) < 0.5:
+                task_warning_reason = "Assigned people do not have any remaining weekly capacity for auto-distribution."
+            elif total_dist == 0:
+                task_warning_reason = "Higher-priority work consumed the available weekly capacity before this task could receive hours."
+            else:
+                task_warning_reason = "There was not enough remaining weekly capacity after the other task allocations."
+            task_warning = f"{gap}h short — {task_warning_reason}"
             warnings.append(f"{task['name']}: {gap}h short")
 
         result_tasks.append({
@@ -269,6 +312,7 @@ def compute_preview(week_number: int, week_start_date: date = None):
             "distributions": distributions,
             "total_distributed": total_dist,
             "warning": task_warning,
+            "warning_reason": task_warning_reason,
         })
 
     # --- Step 6: fill tasks absorb leftover per person ---
@@ -283,6 +327,8 @@ def compute_preview(week_number: int, week_start_date: date = None):
         assigned = task_assigned.get(tid, set())
         distributions = []
         for pid in assigned:
+            if pid not in person_map:
+                continue  # person deactivated but still has assignments
             spare = final_remaining.get(pid, 0)
             if spare >= 0.5:
                 p = person_map[pid]
@@ -316,11 +362,51 @@ def compute_preview(week_number: int, week_start_date: date = None):
             "over_allocated": alloc > weekly + 0.1,
         })
 
+    assignments_res = supabase_query(lambda: supabase.table("task_people").select(
+        "person_id, task_id, preferred_days, day_hours"
+    ).eq("week_number", week_number).execute())
+    preferred_by_person = defaultdict(dict)
+    day_hours_by_person = defaultdict(dict)
+    for row in assignments_res.data:
+        if row.get("preferred_days"):
+            preferred_by_person[row["person_id"]][row["task_id"]] = row["preferred_days"]
+        if row.get("day_hours"):
+            day_hours_by_person[row["person_id"]][row["task_id"]] = {
+                int(k): v for k, v in row["day_hours"].items()
+            }
+
+    tasks_by_person = defaultdict(list)
+    for task in result_tasks:
+        for d in task["distributions"]:
+            tasks_by_person[d["person_id"]].append({
+                "task_id": task["task_id"],
+                "task_name": task["task_name"],
+                "hours_per_week": d["hours"],
+                "schedule_rule": task.get("schedule_rule"),
+                "is_fill": task.get("is_fill", False),
+                "priority": next((t.get("priority") for t in tasks if t["id"] == task["task_id"]), None),
+            })
+
+    daily_warnings = []
+    for p in people:
+        pid = p["id"]
+        sched = {r["day_of_week"]: r["hours"] for r in (p.get("person_schedule") or []) if r["hours"] > 0}
+        _alloc, person_warnings = distribute_week(
+            tasks_by_person.get(pid, []),
+            sched,
+            p["name"],
+            preferred_by_person.get(pid) or None,
+            day_hours_map=day_hours_by_person.get(pid) or None,
+            blocked_days=holiday_dows,
+        )
+        daily_warnings.extend(person_warnings)
+
     return {
         "week_number": week_number,
         "tasks": result_tasks,
         "person_summary": person_summary,
         "warnings": warnings,
+        "daily_warnings": daily_warnings,
     }
 
 
@@ -350,9 +436,9 @@ def confirm_distribution(body: DistributeRequest):
         preview = compute_preview(wn, effective_from)
 
         # Read preferred_days from task_people for this week_number
-        assignments_res = supabase.table("task_people").select(
+        assignments_res = supabase_query(lambda: supabase.table("task_people").select(
             "person_id, task_id, preferred_days"
-        ).eq("week_number", wn).execute()
+        ).eq("week_number", wn).execute())
         preferred_map = {
             (r["person_id"], r["task_id"]): r["preferred_days"]
             for r in assignments_res.data

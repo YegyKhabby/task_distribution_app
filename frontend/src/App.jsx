@@ -8,7 +8,6 @@ import Impact from './pages/Impact'
 import Team from './pages/Team'
 import Calendar from './pages/Calendar'
 import DailyView from './pages/DailyView'
-import DeskbirdAttendance from './pages/DeskbirdAttendance'
 import Actual from './pages/Actual'
 
 export default function App() {
@@ -24,8 +23,7 @@ export default function App() {
         <Route path="/impact" element={<Impact />} />
         <Route path="/calendar" element={<Calendar />} />
         <Route path="/daily" element={<DailyView />} />
-        <Route path="/deskbird-attendance" element={<DeskbirdAttendance />} />
-        <Route path="/actual" element={<Actual />} />
+<Route path="/actual" element={<Actual />} />
       </Routes>
     </Layout>
   )

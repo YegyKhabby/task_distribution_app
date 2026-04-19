@@ -76,6 +76,14 @@ export const api = {
   assignPerson: (data) => req('POST', '/assignments', data).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
   unassignPerson: (taskId, personId, weekNumber) => req('DELETE', `/assignments?task_id=${taskId}&person_id=${personId}&week_number=${weekNumber}`).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
 
+  // Day hours (per-day exact hours for a person-task assignment)
+  setDayHours: (taskId, personId, weekNumber, dayHours) => req('PUT', '/assignments/day-hours', {
+    task_id: taskId,
+    person_id: personId,
+    week_number: weekNumber,
+    day_hours: dayHours,
+  }).then(r => { localStorage.setItem('dist_stale', 'true'); return r }),
+
   // Fixed hours
   getFixedHours: (taskId, weekNumber) => {
     const parts = []
@@ -119,6 +127,9 @@ export const api = {
   // Impact
   getImpact: (weekStart, weekStartOffset = 1) => req('GET', `/impact/${weekStart}?week_start_offset=${weekStartOffset}`),
   getImpactUpcoming: (fromDate, weekStartOffset = 1) => req('GET', `/impact/upcoming?from_date=${fromDate}&week_start_offset=${weekStartOffset}`),
+  getImpactHolidays: (fromDate) => req('GET', `/impact/holidays${fromDate ? `?from_date=${fromDate}` : ''}`),
+  createImpactHoliday: (data) => req('POST', '/impact/holiday', data),
+  deleteImpactHoliday: (date) => req('DELETE', `/impact/holiday?date=${date}`),
 
   // Reallocations
   getReallocations: (weekStart) => req('GET', `/reallocations${weekStart ? `?week_start_date=${weekStart}` : ''}`),
@@ -154,4 +165,5 @@ export const api = {
   getActualLocation: (weekStart) => req('GET', `/actual/location?week_start=${weekStart}`),
   upsertActualLocation: (personId, date, location) => req('PUT', '/actual/location', { person_id: personId, date, location }),
   getActualExportUrl: (dates) => `${BASE}/actual/export?dates=${dates.join(',')}`,
+  getActualMonthExportUrl: (year, month) => `${BASE}/actual/export-month?year=${year}&month=${month}`,
 }

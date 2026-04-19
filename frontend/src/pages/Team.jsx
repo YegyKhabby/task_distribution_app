@@ -25,14 +25,13 @@ function exportTeamExcel(people, allSchedules, asOfDate) {
   const TOT = { fill: { fgColor: { rgb: 'F0FDF4' } }, font: { bold: true, color: { rgb: '166534' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
   const ws = {}
   const setCell = (r, c, v, t, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} } }
+  const setFormula = (sheet, r, c, formula, s) => { sheet[XLSX.utils.encode_cell({ r, c })] = { t: 'n', f: formula, s: s || {} } }
+  const col = (c) => XLSX.utils.encode_col(c)
 
   // Header: Person | Mon | Tue | Wed | Thu | Fri | Total
   setCell(0, 0, 'Person', 's', { ...HDR, alignment: { horizontal: 'left', vertical: 'center' } })
   SCHED_DAYS.forEach((d, i) => setCell(0, 1 + i, d.label, 's', HDR))
   setCell(0, 6, 'Total', 's', HDR)
-
-  const dayColTotals = [0, 0, 0, 0, 0]
-  let grandTotal = 0
 
   for (let ri = 0; ri < active.length; ri++) {
     const p = active[ri]
@@ -44,7 +43,6 @@ function exportTeamExcel(people, allSchedules, asOfDate) {
       const entry = sched[d.num]
       if (entry && entry.hours > 0) {
         const isHome = entry.location === 'home'
-        dayColTotals[i] += entry.hours
         setCell(ri + 1, 1 + i, entry.hours, 'n', {
           fill: { fgColor: { rgb: isHome ? 'CCFBF1' : 'E0E7FF' } },
           font: { color: { rgb: isHome ? '0F766E' : '312E81' }, sz: 10 },
@@ -54,15 +52,14 @@ function exportTeamExcel(people, allSchedules, asOfDate) {
         setCell(ri + 1, 1 + i, '', 's', { fill: { fgColor: { rgb: bg } }, alignment: { horizontal: 'center', vertical: 'center' }, font: { color: { rgb: 'D1D5DB' }, sz: 10 } })
       }
     })
-    setCell(ri + 1, 6, weeklyTotal > 0 ? weeklyTotal : '', weeklyTotal > 0 ? 'n' : 's', { ...TOT, fill: { fgColor: { rgb: bg } } })
-    grandTotal += weeklyTotal
+    setFormula(ws, ri + 1, 6, `SUM(B${ri + 2}:F${ri + 2})`, { ...TOT, fill: { fgColor: { rgb: bg } } })
   }
 
   // Totals row
   const totRow = active.length + 1
   setCell(totRow, 0, 'Total', 's', { ...TOT, alignment: { horizontal: 'left', vertical: 'center' } })
-  SCHED_DAYS.forEach((d, i) => setCell(totRow, 1 + i, dayColTotals[i] > 0 ? dayColTotals[i] : '', dayColTotals[i] > 0 ? 'n' : 's', TOT))
-  setCell(totRow, 6, grandTotal, 'n', TOT)
+  SCHED_DAYS.forEach((d, i) => setFormula(ws, totRow, 1 + i, `SUM(${col(1 + i)}2:${col(1 + i)}${totRow})`, TOT))
+  setFormula(ws, totRow, 6, `SUM(B${totRow + 1}:F${totRow + 1})`, TOT)
 
   ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totRow, c: 6 } })
   ws['!cols'] = [{ wch: 16 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }]
@@ -93,7 +90,6 @@ function exportTeamExcel(people, allSchedules, asOfDate) {
       const entry = futureEntries[ri]
       const person = people.find(p => p.id === entry.person_id)
       const bg = ri % 2 === 0 ? 'FFFFFF' : 'F9FAFB'
-      const weeklyTotal = SCHED_DAYS.reduce((s, d) => s + (entry.days[d.num]?.hours || 0), 0)
       setCell2(ri + 1, 0, person?.name ?? entry.person_id, 's', { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } })
       setCell2(ri + 1, 1, entry.valid_from, 's', { fill: { fgColor: { rgb: 'FFFBEB' } }, font: { color: { rgb: 'B45309' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } })
       SCHED_DAYS.forEach((d, i) => {
@@ -109,9 +105,14 @@ function exportTeamExcel(people, allSchedules, asOfDate) {
           setCell2(ri + 1, 2 + i, '', 's', { fill: { fgColor: { rgb: bg } } })
         }
       })
-      setCell2(ri + 1, 7, weeklyTotal > 0 ? weeklyTotal : '', weeklyTotal > 0 ? 'n' : 's', { ...TOT, fill: { fgColor: { rgb: bg } } })
+      setFormula(ws2, ri + 1, 7, `SUM(C${ri + 2}:G${ri + 2})`, { ...TOT, fill: { fgColor: { rgb: bg } } })
     }
-    ws2['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: futureEntries.length, c: 7 } })
+    const futureTotRow = futureEntries.length + 1
+    setCell2(futureTotRow, 0, 'Total', 's', { ...TOT, alignment: { horizontal: 'left', vertical: 'center' } })
+    setCell2(futureTotRow, 1, '', 's', TOT)
+    SCHED_DAYS.forEach((d, i) => setFormula(ws2, futureTotRow, 2 + i, `SUM(${col(2 + i)}2:${col(2 + i)}${futureTotRow})`, TOT))
+    setFormula(ws2, futureTotRow, 7, `SUM(C${futureTotRow + 1}:G${futureTotRow + 1})`, TOT)
+    ws2['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: futureTotRow, c: 7 } })
   }
   ws2['!cols'] = [{ wch: 16 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }]
 

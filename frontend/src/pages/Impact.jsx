@@ -58,11 +58,13 @@ export default function Impact() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [holidays, setHolidays] = useState([])
   const [tasks, setTasks] = useState([])
   const [selectedPersonId, setSelectedPersonId] = useState(null)
   const [makeupEntries, setMakeupEntries] = useState([])
   const [redirectForm, setRedirectForm] = useState(null)
   const [carryForwardForm, setCarryForwardForm] = useState(null)
+  const [holidayModalOpen, setHolidayModalOpen] = useState(false)
 
   useEffect(() => {
     api.getTasks().then(setTasks)
@@ -74,8 +76,12 @@ export default function Impact() {
     try {
       const now = new Date()
       const weekStartOffset = parseInt(localStorage.getItem(`week_start_${now.getFullYear()}_${now.getMonth() + 1}`) || '1', 10)
-      const res = await api.getImpactUpcoming(today, weekStartOffset)
+      const [res, holidayRows] = await Promise.all([
+        api.getImpactUpcoming(today, weekStartOffset),
+        api.getImpactHolidays(today),
+      ])
       setData(res)
+      setHolidays(holidayRows)
       setSelectedPersonId((prev) => {
         if (prev && res.persons.find((p) => p.person_id === prev)) return prev
         return res.persons[0]?.person_id ?? null
@@ -110,11 +116,10 @@ export default function Impact() {
       r.redirected_from?.name ?? '',
       r.confirmed_by ?? '',
     ])
-    const coverageTotalHrs = coverageData.reduce((s, r) => s + (r[3] || 0), 0)
     const coverageRows = [
       ['Week', 'Covering person', 'Task', 'Hours', 'Redirected from task', 'Confirmed by'],
       ...coverageData,
-      ['', '', 'Total', coverageTotalHrs, '', ''],
+      ['', '', 'Total', null, '', ''],
     ]
 
     // Sheet 2: Carry-forward log
@@ -125,16 +130,19 @@ export default function Impact() {
       m.hours,
       m.note ?? '',
     ])
-    const carryTotalHrs = carryData.reduce((s, r) => s + (r[3] || 0), 0)
     const carryRows = [
       ['Target week', 'Absent person', 'Task', 'Hours', 'Note'],
       ...carryData,
-      ['', '', 'Total', carryTotalHrs, ''],
+      ['', '', 'Total', null, ''],
     ]
 
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(coverageRows), 'Coverage log')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(carryRows), 'Carry forward')
+    const coverageSheet = XLSX.utils.aoa_to_sheet(coverageRows)
+    coverageSheet['D' + coverageRows.length] = { t: 'n', f: `SUM(D2:D${coverageRows.length - 1})` }
+    const carrySheet = XLSX.utils.aoa_to_sheet(carryRows)
+    carrySheet['D' + carryRows.length] = { t: 'n', f: `SUM(D2:D${carryRows.length - 1})` }
+    XLSX.utils.book_append_sheet(wb, coverageSheet, 'Coverage log')
+    XLSX.utils.book_append_sheet(wb, carrySheet, 'Carry forward')
     XLSX.writeFile(wb, 'impact_log.xlsx')
   }
 
@@ -142,6 +150,9 @@ export default function Impact() {
     <div>
       <div className="flex items-center gap-3 mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Impact</h1>
+        <button onClick={() => setHolidayModalOpen(true)} className="text-sm text-amber-700 border border-amber-300 rounded px-3 py-1 hover:bg-amber-50">
+          + Holiday
+        </button>
         <button onClick={exportToExcel} className="ml-auto text-sm text-gray-600 border border-gray-300 rounded px-3 py-1 hover:bg-gray-50">
           Download log
         </button>
@@ -154,13 +165,37 @@ export default function Impact() {
       {error && <p className="text-red-500">{error}</p>}
 
       {data && !loading && (
-        data.persons.length === 0 ? (
-          <div className="text-center py-16 text-gray-400">
-            <p className="text-4xl mb-3">✓</p>
-            <p className="text-lg font-medium">No upcoming absences</p>
-          </div>
-        ) : (
-          <>
+        <>
+          {holidays.length > 0 && (
+            <div className="mb-6">
+              <h2 className="text-sm font-semibold text-gray-700 mb-2">Team Holidays</h2>
+              <div className="flex flex-wrap gap-2">
+                {holidays.map((h) => (
+                  <div key={`${h.date}:${h.name}`} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm">
+                    <span className="font-medium text-amber-800">{h.name}</span>
+                    <span className="text-amber-700">{fmtDate(h.date)}</span>
+                    <button
+                      onClick={async () => {
+                        await api.deleteImpactHoliday(h.date)
+                        load()
+                      }}
+                      className="text-xs text-amber-700 hover:text-red-600"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {data.persons.length === 0 ? (
+            <div className="text-center py-16 text-gray-400">
+              <p className="text-4xl mb-3">✓</p>
+              <p className="text-lg font-medium">No upcoming absences</p>
+            </div>
+          ) : (
+            <>
             {/* Person tabs */}
             <div className="flex gap-2 flex-wrap mb-6">
               {data.persons.map((p) => (
@@ -198,8 +233,9 @@ export default function Impact() {
                 }}
               />
             )}
-          </>
-        )
+            </>
+          )}
+        </>
       )}
 
       {redirectForm && (
@@ -219,7 +255,81 @@ export default function Impact() {
           onDone={() => { setCarryForwardForm(null); load() }}
         />
       )}
+
+      {holidayModalOpen && (
+        <HolidayModal
+          onClose={() => setHolidayModalOpen(false)}
+          onDone={() => { setHolidayModalOpen(false); load() }}
+        />
+      )}
     </div>
+  )
+}
+
+function HolidayModal({ onClose, onDone }) {
+  const [form, setForm] = useState({
+    date: format(addDays(new Date(), 1), 'yyyy-MM-dd'),
+    name: '',
+  })
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const submit = async () => {
+    if (!form.date) { setError('Select a date'); return }
+    setSaving(true)
+    setError('')
+    try {
+      await api.createImpactHoliday({
+        date: form.date,
+        name: form.name.trim() || null,
+      })
+      onDone()
+    } catch (e) {
+      setError(e.message)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Modal title="Add Team Holiday" onClose={onClose}>
+      <p className="text-sm text-gray-500 mb-4">
+        This marks everyone absent for a weekday holiday, so Impact, Calendar, Daily View, and Actual copy all use the same date.
+      </p>
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Date</label>
+          <input
+            type="date"
+            value={form.date}
+            onChange={(e) => setForm({ ...form, date: e.target.value })}
+            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Name</label>
+          <input
+            type="text"
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            placeholder="Public holiday"
+            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+          />
+        </div>
+        {error && <p className="text-red-500 text-sm">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={submit}
+            disabled={saving}
+            className="bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save holiday'}
+          </button>
+          <button onClick={onClose} className="text-gray-600 px-4 py-2 rounded-lg text-sm hover:bg-gray-100">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 

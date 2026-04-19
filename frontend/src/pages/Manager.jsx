@@ -19,6 +19,8 @@ function exportTasksExcel(tasks, people, distribution, weekNumber) {
   const ncols = FIXED + people.length + 1
   const ws = {}
   const setCell = (r, c, v, t, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} } }
+  const setFormula = (r, c, formula, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { t: 'n', f: formula, s: s || {} } }
+  const col = (c) => XLSX.utils.encode_col(c)
 
   // Title row
   setCell(0, 0, `Task Distribution — Week ${weekNumber}`, 's', { fill: { fgColor: { rgb: '312E81' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 12 }, alignment: { horizontal: 'left', vertical: 'center' } })
@@ -29,8 +31,6 @@ function exportTasksExcel(tasks, people, distribution, weekNumber) {
   headers.forEach((h, c) => setCell(1, c, h, 's', HDR))
 
   // Task rows
-  const personColTotals = new Array(people.length).fill(0)
-  let grandTotal = 0
   for (let ri = 0; ri < sorted.length; ri++) {
     const t = sorted[ri]
     const colorHex = (t.color || '').replace('#', '')
@@ -40,25 +40,24 @@ function exportTasksExcel(tasks, people, distribution, weekNumber) {
     setCell(ri + 2, 0, t.name, 's', taskStyle)
     setCell(ri + 2, 1, t.priority ?? '', t.priority != null ? 'n' : 's', NUM)
     setCell(ri + 2, 2, t.is_fill ? '—' : (t.weekly_hours_target || 0), t.is_fill ? 's' : 'n', NUM)
-    setCell(ri + 2, 3, t.responsible_person || '', 's', LEFT)
-    setCell(ri + 2, 4, t.schedule_rule || '', 's', LEFT)
-    let taskRowTotal = 0
+    setCell(ri + 2, 3, t.repeats_weekly === false ? 'One-off' : 'Weekly', 's', LEFT)
+    setCell(ri + 2, 4, t.responsible_person || '', 's', LEFT)
+    setCell(ri + 2, 5, t.schedule_rule || '', 's', LEFT)
     people.forEach((p, i) => {
       const hrs = (distMap[p.id] || {})[t.id] || 0
-      personColTotals[i] += hrs
-      taskRowTotal += hrs
       setCell(ri + 2, FIXED + i, hrs > 0 ? hrs : '', hrs > 0 ? 'n' : 's', NUM)
     })
-    setCell(ri + 2, ncols - 1, taskRowTotal > 0 ? taskRowTotal : '', taskRowTotal > 0 ? 'n' : 's', { ...NUM, font: { bold: true, sz: 10 } })
-    grandTotal += taskRowTotal
+    if (people.length > 0) setFormula(ri + 2, ncols - 1, `SUM(${col(FIXED)}${ri + 3}:${col(ncols - 2)}${ri + 3})`, { ...NUM, font: { bold: true, sz: 10 } })
+    else setCell(ri + 2, ncols - 1, '', 's', { ...NUM, font: { bold: true, sz: 10 } })
   }
 
   // Totals row
   const totRow = sorted.length + 2
   setCell(totRow, 0, 'Total', 's', { ...TOT, alignment: { horizontal: 'left', vertical: 'center' } })
   for (let c = 1; c < FIXED; c++) setCell(totRow, c, '', 's', TOT)
-  people.forEach((p, i) => setCell(totRow, FIXED + i, personColTotals[i] > 0 ? personColTotals[i] : '', personColTotals[i] > 0 ? 'n' : 's', TOT))
-  setCell(totRow, ncols - 1, grandTotal, 'n', TOT)
+  people.forEach((p, i) => setFormula(totRow, FIXED + i, `SUM(${col(FIXED + i)}3:${col(FIXED + i)}${totRow})`, TOT))
+  if (people.length > 0) setFormula(totRow, ncols - 1, `SUM(${col(FIXED)}${totRow + 1}:${col(ncols - 2)}${totRow + 1})`, TOT)
+  else setCell(totRow, ncols - 1, '', 's', TOT)
 
   ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totRow, c: ncols - 1 } })
   ws['!cols'] = [{ wch: 26 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 16 }, ...people.map(() => ({ wch: 10 })), { wch: 8 }]
@@ -170,18 +169,34 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   // ── Hours summary state ──
   const [distAvg, setDistAvg] = useState(null)
 
+  // All 4 weeks' per-week settings — kept fresh so save() can detect which
+  // weeks are missing an explicit override and initialize them.
+  const [allWeekSettings, setAllWeekSettings] = useState([])
+
+  // ── Per-task week comparison state ──
+  const [reviewTaskId, setReviewTaskId] = useState(null)
+  const [reviewData, setReviewData] = useState(null)
+  const [reviewLoading, setReviewLoading] = useState(false)
+
+  // ── All-tasks week comparison state ──
+  const [compareAllOpen, setCompareAllOpen] = useState(false)
+  const [compareAllData, setCompareAllData] = useState(null)
+  const [compareAllLoading, setCompareAllLoading] = useState(false)
+
   // ── Load week assignments + distribution ──
   const loadWeekData = useCallback(async (wn) => {
-    const [a, d, f, s] = await Promise.all([
+    const [a, d, f, s, all] = await Promise.all([
       api.getAssignments(wn),
       api.getDistribution(wn),
       api.getFixedHours(null, wn),
       api.getTaskWeekSettings(wn),
+      api.getAllTaskWeekSettings(),
     ])
     setWeekAssignments(a)
     setDistribution(d)
     setWeekFixedHours(f)
     setWeekSettings(s)
+    setAllWeekSettings(all)
   }, [])
 
   useEffect(() => { loadWeekData(weekNumber) }, [weekNumber, loadWeekData])
@@ -276,11 +291,19 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     ...t,
     weekly_hours_target: weekTargetMap[t.id] ?? t.weekly_hours_target,
   }))
+  const fillTasks = displayedTasks.filter((t) => t.is_fill)
 
   const preferredDayMap = {}
   for (const a of weekAssignments) {
     if (a.preferred_days?.length) {
       preferredDayMap[`${a.task_id}:${a.person_id}`] = a.preferred_days
+    }
+  }
+
+  const dayHoursMap = {}
+  for (const a of weekAssignments) {
+    if (a.day_hours && Object.keys(a.day_hours).length) {
+      dayHoursMap[`${a.task_id}:${a.person_id}`] = a.day_hours
     }
   }
 
@@ -340,10 +363,46 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
         setEditing(null)
         setExpanded(null)
       } else {
-        await api.updateTask(editing, globalData)
-        await Promise.all(weeksFor(editing).map((wn) =>
-          api.updateTaskWeekSettings(editing, wn, targetValue)
-        ))
+        // For existing tasks: never touch the global weekly_hours_target.
+        // Hours are always managed through per-week settings so that
+        // changing "Hrs / week W2" never bleeds into other weeks.
+        const { weekly_hours_target: _omit, ...taskFields } = globalData
+        await api.updateTask(editing, taskFields)
+
+        const isAllWeeks = thisWeekOnly.has(editing)
+        if (isAllWeeks) {
+          // All-weeks mode: update every week explicitly
+          await Promise.all([1, 2, 3, 4].map((wn) =>
+            api.updateTaskWeekSettings(editing, wn, targetValue)
+          ))
+        } else {
+          // Week-only mode: only write if the value actually changed.
+          // This prevents spurious auto-saves (e.g. input blur from clicking
+          // a nearby button) from running the initialization logic and making
+          // all weeks appear to have the same hours.
+          const existingOverride = allWeekSettings.find(
+            (s) => s.task_id === editing && s.week_number === weekNumber
+          )
+          const globalTask = tasks.find((t) => t.id === editing)
+          const storedTarget = existingOverride != null
+            ? existingOverride.weekly_hours_target
+            : (globalTask?.weekly_hours_target ?? 0)
+          const hoursChanged = Math.abs(targetValue - storedTarget) > 0.001
+
+          if (hoursChanged) {
+            // Update current week + initialize any weeks that have no explicit
+            // row yet, locking them in at the global value so future single-week
+            // changes never bleed into them via the global fallback.
+            const globalTarget = globalTask?.weekly_hours_target ?? 0
+            const weeksToInit = [1, 2, 3, 4].filter(
+              (wn) => wn !== weekNumber && !allWeekSettings.some((s) => s.task_id === editing && s.week_number === wn)
+            )
+            await Promise.all([
+              api.updateTaskWeekSettings(editing, weekNumber, targetValue),
+              ...weeksToInit.map((wn) => api.updateTaskWeekSettings(editing, wn, globalTarget)),
+            ])
+          }
+        }
       }
       await onReload()
       await loadWeekData(weekNumber)
@@ -394,6 +453,27 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     await loadWeekData(weekNumber)
   }
 
+  const updateDayHours = async (taskId, personId, dayHoursObj) => {
+    // dayHoursObj: {1: 2.0, 3: 1.0} — only days with values, or {} to clear all
+    const payload = Object.keys(dayHoursObj).length ? dayHoursObj : null
+    await Promise.all(weeksFor(taskId).map(wn =>
+      api.setDayHours(taskId, personId, wn, payload)
+    ))
+    await loadWeekData(weekNumber)
+  }
+
+  const updateDaySelection = async (taskId, personId, selectedDays, dayHoursObj) => {
+    const cleanSelectedDays = selectedDays.length ? [...selectedDays].sort((a, b) => a - b) : null
+    const cleanDayHours = Object.fromEntries(
+      Object.entries(dayHoursObj || {}).filter(([, value]) => Number(value) > 0)
+    )
+    await Promise.all([
+      ...weeksFor(taskId).map((wn) => api.setPreferredDays(taskId, personId, wn, cleanSelectedDays)),
+      ...weeksFor(taskId).map((wn) => api.setDayHours(taskId, personId, wn, Object.keys(cleanDayHours).length ? cleanDayHours : null)),
+    ])
+    await loadWeekData(weekNumber)
+  }
+
   const toggleThisWeekOnly = (taskId) => {
     setThisWeekOnly(prev => {
       const next = new Set(prev)
@@ -403,8 +483,112 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     })
   }
 
+  // ── All-tasks comparison ──
+  const loadCompareAll = async () => {
+    setCompareAllLoading(true)
+    setCompareAllData(null)
+    try {
+      const [allWeekAssignments, allWeekDists] = await Promise.all([
+        Promise.all([1, 2, 3, 4].map((wn) => api.getAssignments(wn))),
+        Promise.all([1, 2, 3, 4].map((wn) => api.getDistribution(wn))),
+      ])
+      // distByWeek[wn][taskId][personId] = hours_per_week
+      const distByWeek = {}
+      allWeekDists.forEach((rows, idx) => {
+        const wn = idx + 1
+        distByWeek[wn] = {}
+        ;(rows || []).forEach((row) => {
+          if (!distByWeek[wn][row.task_id]) distByWeek[wn][row.task_id] = {}
+          distByWeek[wn][row.task_id][row.person_id] = row.hours_per_week
+        })
+      })
+      const byTask = {}
+      allWeekAssignments.forEach((assignments, idx) => {
+        const wn = idx + 1
+        ;(assignments || []).forEach((a) => {
+          if (!byTask[a.task_id]) {
+            const task = tasks.find((t) => t.id === a.task_id)
+            byTask[a.task_id] = { taskName: task?.name || a.task_id, taskColor: task?.color, persons: {} }
+          }
+          if (!byTask[a.task_id].persons[a.person_id]) {
+            const p = people.find((pp) => pp.id === a.person_id)
+            byTask[a.task_id].persons[a.person_id] = { name: p?.name || a.person_id, assignedWeeks: new Set(), weeks: {}, distHours: {} }
+          }
+          byTask[a.task_id].persons[a.person_id].assignedWeeks.add(wn)
+          byTask[a.task_id].persons[a.person_id].weeks[wn] = a.day_hours || {}
+          byTask[a.task_id].persons[a.person_id].distHours[wn] = distByWeek[wn]?.[a.task_id]?.[a.person_id] ?? null
+        })
+      })
+      setCompareAllData(byTask)
+    } catch (e) {
+      setCompareAllData({})
+    }
+    setCompareAllLoading(false)
+  }
+
+  const toggleCompareAll = () => {
+    if (compareAllOpen) {
+      setCompareAllOpen(false)
+    } else {
+      setCompareAllOpen(true)
+      loadCompareAll()
+    }
+  }
+
+  // ── Per-task week comparison ──
+  const openReview = async (taskId) => {
+    if (reviewTaskId === taskId) {
+      setReviewTaskId(null)
+      setReviewData(null)
+      return
+    }
+    setReviewTaskId(taskId)
+    setReviewData(null)
+    setReviewLoading(true)
+    try {
+      const [allWeekAssignments, allWeekDists] = await Promise.all([
+        Promise.all([1, 2, 3, 4].map((wn) => api.getAssignments(wn, taskId))),
+        Promise.all([1, 2, 3, 4].map((wn) => api.getDistribution(wn))),
+      ])
+      // distHoursMap[wn][personId] = distributed hours for this task
+      const distHoursMap = {}
+      allWeekDists.forEach((rows, idx) => {
+        const wn = idx + 1
+        distHoursMap[wn] = {}
+        ;(rows || []).forEach((row) => {
+          if (row.task_id === taskId) distHoursMap[wn][row.person_id] = row.hours_per_week
+        })
+      })
+      const byPerson = {}
+      allWeekAssignments.forEach((assignments, idx) => {
+        const wn = idx + 1
+        ;(assignments || []).forEach((a) => {
+          if (!byPerson[a.person_id]) {
+            const p = people.find((pp) => pp.id === a.person_id)
+            byPerson[a.person_id] = { name: p?.name || a.person_id, assignedWeeks: new Set(), weeks: {}, distHours: {} }
+          }
+          byPerson[a.person_id].assignedWeeks.add(wn)
+          byPerson[a.person_id].weeks[wn] = a.day_hours || {}
+          byPerson[a.person_id].distHours[wn] = distHoursMap[wn]?.[a.person_id] ?? null
+        })
+      })
+      setReviewData(byPerson)
+    } catch (e) {
+      setReviewData({})
+    }
+    setReviewLoading(false)
+  }
+
   return (
     <div>
+      {fillTasks.length > 1 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-sm font-semibold text-amber-800">Multiple fill tasks selected</p>
+          <p className="text-sm text-amber-700">
+            Only the first fill task will absorb spare hours reliably. Current fill tasks: {fillTasks.map((t) => t.name).join(', ')}.
+          </p>
+        </div>
+      )}
       {/* ── Hours summary bar — per week ── */}
       {weekHours && (
         <div className="mb-4">
@@ -484,6 +668,17 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
             className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
           />
           <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={toggleCompareAll}
+            className={`text-sm px-3 py-1.5 rounded-lg border transition-colors ${
+              compareAllOpen
+                ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
+                : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            ⇄ Compare All
+          </button>
+          <button
             onClick={() => exportTasksExcel(displayedTasks, people, distribution, weekNumber)}
             className="text-sm text-gray-600 border border-gray-200 px-3 py-1.5 rounded-lg hover:bg-gray-50"
           >
@@ -526,6 +721,17 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
         </div>
       )}
 
+      {/* ── Compare All panel ── */}
+      {compareAllOpen && (
+        <CompareAllPanel
+          data={compareAllData}
+          loading={compareAllLoading}
+          tasks={tasks}
+          onClose={() => setCompareAllOpen(false)}
+          onRefresh={loadCompareAll}
+        />
+      )}
+
       {/* ── Task list ── */}
       <div className="space-y-3">
         {displayedTasks.map((t) => {
@@ -566,6 +772,18 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                   <span className="text-xs text-gray-400 shrink-0">{assigned.size} assigned</span>
                 </button>
                 <button
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => { e.stopPropagation(); openReview(t.id) }}
+                  className={`text-xs px-2 py-1 rounded border shrink-0 transition-colors ${
+                    reviewTaskId === t.id
+                      ? 'border-indigo-400 bg-indigo-50 text-indigo-600'
+                      : 'border-gray-200 text-gray-400 hover:text-indigo-500 hover:border-indigo-200'
+                  }`}
+                  title="Compare day-hour assignments across all 4 weeks"
+                >
+                  ⇄ Compare
+                </button>
+                <button
                   onClick={() => setPendingTaskDelete(t)}
                   className="text-xs px-2 py-1 rounded border border-red-200 text-red-500 hover:bg-red-50 shrink-0"
                 >
@@ -573,6 +791,17 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                 </button>
                 <span className="text-gray-400 text-xs shrink-0">{isOpen ? '▲' : '▼'}</span>
               </div>
+
+              {/* Week comparison panel */}
+              {reviewTaskId === t.id && (
+                <WeekComparePanel
+                  task={t}
+                  reviewData={reviewData}
+                  reviewLoading={reviewLoading}
+                  onClose={() => { setReviewTaskId(null); setReviewData(null) }}
+                  onRefresh={() => openReview(t.id)}
+                />
+              )}
 
               {/* Expanded: edit form + people & assignments */}
               {isOpen && (
@@ -625,6 +854,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                       const key = `${t.id}:${p.id}`
                       const fixed = fixedMap[key]
                       const preferredDays = preferredDayMap[key] ?? []
+                      const currentDayHours = dayHoursMap[key] || {}
                       const isSaving = saving[key]
 
                       return (
@@ -660,27 +890,56 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                                 />
                                 <span className="text-xs text-gray-400">{fixed ? 'fixed hrs' : 'auto'}</span>
                               </div>
-                              <div className="flex items-center gap-1">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 {DAY_OPTIONS.map((o) => {
-                                  const active = preferredDays.includes(o.value)
+                                  const isSelected = preferredDays.includes(o.value) || currentDayHours[String(o.value)] != null || currentDayHours[o.value] != null
+                                  const currentHours = currentDayHours[String(o.value)] ?? currentDayHours[o.value] ?? ''
                                   return (
-                                    <button
-                                      key={o.value}
-                                      type="button"
-                                      onClick={() => {
-                                        const next = active
-                                          ? preferredDays.filter(d => d !== o.value)
-                                          : [...preferredDays, o.value]
-                                        updatePreferredDays(t.id, p.id, next)
-                                      }}
-                                      className={`px-2 py-0.5 rounded text-xs font-medium border transition-colors ${
-                                        active
-                                          ? 'bg-indigo-600 text-white border-indigo-600'
-                                          : 'text-gray-400 border-gray-200 hover:border-indigo-300 hover:text-indigo-500'
-                                      }`}
-                                    >
-                                      {o.label}
-                                    </button>
+                                    <div key={o.value} className={`flex items-center gap-1 rounded-md border px-1.5 py-1 ${isSelected ? 'border-indigo-200 bg-indigo-50' : 'border-gray-200 bg-white'}`}>
+                                      <label className="flex items-center gap-1 cursor-pointer">
+                                        <input
+                                          type="checkbox"
+                                          checked={isSelected}
+                                          onChange={(e) => {
+                                            const nextSelected = e.target.checked
+                                              ? [...new Set([...preferredDays, o.value])]
+                                              : preferredDays.filter((d) => d !== o.value)
+                                            const nextDayHours = { ...currentDayHours }
+                                            if (!e.target.checked) {
+                                              delete nextDayHours[o.value]
+                                              delete nextDayHours[String(o.value)]
+                                            }
+                                            updateDaySelection(t.id, p.id, nextSelected, nextDayHours)
+                                          }}
+                                          className="w-3.5 h-3.5 rounded text-indigo-600"
+                                        />
+                                        <span className="text-[10px] text-gray-600">{o.label}</span>
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        step={0.5}
+                                        placeholder="—"
+                                        defaultValue={currentHours !== '' ? currentHours : ''}
+                                        key={`${key}:${weekNumber}:${currentHours}`}
+                                        disabled={!isSelected}
+                                        onBlur={(e) => {
+                                          const val = e.target.value
+                                          const nextSelected = isSelected
+                                            ? [...new Set([...preferredDays, o.value])]
+                                            : [...preferredDays]
+                                          const current = currentDayHours ? { ...currentDayHours } : {}
+                                          if (val === '' || Number(val) <= 0) {
+                                            delete current[o.value]
+                                            delete current[String(o.value)]
+                                          } else {
+                                            current[o.value] = Number(val)
+                                          }
+                                          updateDaySelection(t.id, p.id, nextSelected, current)
+                                        }}
+                                        className="w-12 border border-gray-300 rounded px-1 py-0.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-indigo-400 placeholder-gray-300 disabled:bg-gray-100 disabled:text-gray-300"
+                                      />
+                                    </div>
                                   )
                                 })}
                               </div>
@@ -827,16 +1086,368 @@ function TaskForm({ form, setForm, error, onSave, onCancel, onAutoSave, isNew, w
   )
 }
 
+// ── Week Comparison Panel ──────────────────────────────────────────────────
+
+const COMPARE_DAYS = [
+  { value: 1, label: 'Mon' },
+  { value: 2, label: 'Tue' },
+  { value: 3, label: 'Wed' },
+  { value: 4, label: 'Thu' },
+  { value: 5, label: 'Fri' },
+]
+
+function WeekComparePanel({ task, reviewData, reviewLoading, onClose, onRefresh }) {
+  if (reviewLoading) {
+    return (
+      <div className="border-t border-indigo-100 px-5 py-4 bg-indigo-50">
+        <p className="text-sm text-indigo-500 animate-pulse">Loading week comparisons…</p>
+      </div>
+    )
+  }
+
+  if (!reviewData) return null
+
+  const personIds = Object.keys(reviewData)
+
+  return (
+    <div className="border-t border-indigo-100 bg-indigo-50">
+      <div className="flex items-center justify-between px-5 py-2 border-b border-indigo-100">
+        <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Compare weeks — day-hour pins</p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onRefresh}
+            className="text-xs text-indigo-500 hover:text-indigo-700 px-2 py-0.5 rounded hover:bg-indigo-100"
+            title="Refresh"
+          >
+            ↺ Refresh
+          </button>
+          <button
+            onClick={onClose}
+            className="text-xs text-indigo-400 hover:text-indigo-600 px-2 py-0.5 rounded hover:bg-indigo-100"
+          >
+            ✕ Close
+          </button>
+        </div>
+      </div>
+
+      {personIds.length === 0 ? (
+        <p className="px-5 py-3 text-sm text-gray-400 italic">No one assigned to this task in any week.</p>
+      ) : (
+        <div className="px-5 py-3 space-y-4">
+          {personIds.map((pid) => {
+            const { name, assignedWeeks, weeks, distHours = {} } = reviewData[pid]
+
+            // Per-day pin differences
+            const dayDiffersMap = {}
+            COMPARE_DAYS.forEach(({ value: dow }) => {
+              const vals = [...assignedWeeks].map((wn) => {
+                const dh = weeks[wn] || {}
+                return dh[String(dow)] ?? dh[dow] ?? null
+              })
+              const defined = vals.filter((v) => v !== null)
+              dayDiffersMap[dow] = defined.length > 1 && !defined.every((v) => v === defined[0])
+            })
+
+            // Total distributed hours differences
+            const totalVals = [...assignedWeeks].map((wn) => distHours[wn]).filter((v) => v != null)
+            const totalDiffers = totalVals.length > 1 && !totalVals.every((v) => v === totalVals[0])
+
+            const hasDiffs = Object.values(dayDiffersMap).some(Boolean) || totalDiffers
+
+            return (
+              <div key={pid}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-sm font-medium text-gray-800">{name}</span>
+                  {hasDiffs ? (
+                    <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">⚠ differs across weeks</span>
+                  ) : (
+                    <span className="text-[10px] bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full">consistent</span>
+                  )}
+                </div>
+                <table className="text-xs border-collapse">
+                  <thead>
+                    <tr>
+                      <th className="text-left text-gray-400 font-medium pr-4 pb-1 min-w-10">Week</th>
+                      <th className={`text-center font-medium pb-1 w-14 pr-3 border-r border-gray-200 ${totalDiffers ? 'text-amber-600' : 'text-gray-400'}`}>
+                        Total{totalDiffers && <span className="ml-0.5 text-[9px]">▲</span>}
+                      </th>
+                      {COMPARE_DAYS.map((d) => (
+                        <th
+                          key={d.value}
+                          className={`text-center font-medium pb-1 w-14 ${dayDiffersMap[d.value] ? 'text-amber-600' : 'text-gray-400'}`}
+                        >
+                          {d.label}
+                          {dayDiffersMap[d.value] && <span className="ml-0.5 text-[9px]">▲</span>}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[1, 2, 3, 4].map((wn) => {
+                      const isAssigned = assignedWeeks.has(wn)
+                      const dh = weeks[wn] || {}
+                      const total = isAssigned ? distHours[wn] : null
+                      return (
+                        <tr key={wn}>
+                          <td className={`pr-4 py-0.5 font-medium ${isAssigned ? 'text-indigo-600' : 'text-gray-300'}`}>
+                            W{wn}
+                          </td>
+                          <td className={`text-center py-0.5 px-1 pr-3 border-r border-gray-200 rounded ${
+                            !isAssigned ? 'text-gray-300'
+                            : totalDiffers && total != null ? 'bg-amber-100 text-amber-800 font-semibold'
+                            : total != null ? 'text-gray-700'
+                            : 'text-gray-400'
+                          }`}>
+                            {!isAssigned ? '—' : total != null ? `${total}h` : '?'}
+                          </td>
+                          {COMPARE_DAYS.map(({ value: dow }) => {
+                            const val = isAssigned ? (dh[String(dow)] ?? dh[dow] ?? null) : null
+                            const differs = dayDiffersMap[dow] && isAssigned && val !== null
+                            return (
+                              <td
+                                key={dow}
+                                className={`text-center py-0.5 px-1 rounded ${
+                                  !isAssigned
+                                    ? 'text-gray-300'
+                                    : differs
+                                      ? 'bg-amber-100 text-amber-800 font-semibold'
+                                      : val !== null
+                                        ? 'text-gray-700'
+                                        : 'text-gray-300'
+                                }`}
+                              >
+                                {!isAssigned ? '—' : val !== null ? `${val}h` : 'auto'}
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })}
+          <p className="text-[10px] text-indigo-400 pt-1">
+            Total = confirmed distributed hours. "auto" = no explicit day pin. ▲ = differs across weeks.
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Compare All Panel ─────────────────────────────────────────────────────
+
+function CompareAllPanel({ data, loading, tasks, onClose, onRefresh }) {
+  if (loading) {
+    return (
+      <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-4">
+        <p className="text-sm text-indigo-500 animate-pulse">Loading all task comparisons…</p>
+      </div>
+    )
+  }
+  if (!data) return null
+
+  // Sort tasks to match the task list order (priority then name)
+  const sortedTaskIds = Object.keys(data).sort((a, b) => {
+    const ta = tasks.find((t) => t.id === a)
+    const tb = tasks.find((t) => t.id === b)
+    const pa = ta?.priority ?? 99, pb = tb?.priority ?? 99
+    if (pa !== pb) return pa - pb
+    return (ta?.name || '').localeCompare(tb?.name || '')
+  })
+
+  // Compute diffs for every task × person
+  const tasksWithDiffs = []
+  let totalDiffCount = 0
+
+  for (const taskId of sortedTaskIds) {
+    const { taskName, taskColor, persons } = data[taskId]
+    const personEntries = Object.entries(persons)
+    const diffPersons = []
+
+    for (const [pid, { name, assignedWeeks, weeks, distHours = {} }] of personEntries) {
+      const dayDiffersMap = {}
+      COMPARE_DAYS.forEach(({ value: dow }) => {
+        const vals = [...assignedWeeks].map((wn) => {
+          const dh = weeks[wn] || {}
+          return dh[String(dow)] ?? dh[dow] ?? null
+        })
+        const defined = vals.filter((v) => v !== null)
+        dayDiffersMap[dow] = defined.length > 1 && !defined.every((v) => v === defined[0])
+      })
+      const totalVals = [...assignedWeeks].map((wn) => distHours[wn]).filter((v) => v != null)
+      const totalDiffers = totalVals.length > 1 && !totalVals.every((v) => v === totalVals[0])
+      const hasDiff = Object.values(dayDiffersMap).some(Boolean) || totalDiffers
+      if (hasDiff) {
+        diffPersons.push({ pid, name, assignedWeeks, weeks, distHours, dayDiffersMap, totalDiffers })
+        totalDiffCount++
+      }
+    }
+
+    if (diffPersons.length > 0) {
+      tasksWithDiffs.push({ taskId, taskName, taskColor, diffPersons })
+    }
+  }
+
+  return (
+    <div className="bg-white border border-indigo-200 rounded-xl shadow-sm overflow-hidden mb-4">
+      <div className="flex items-center justify-between px-5 py-2.5 bg-indigo-50 border-b border-indigo-100">
+        <div className="flex items-center gap-3">
+          <p className="text-sm font-semibold text-indigo-800">Week-over-week day-pin differences — all tasks</p>
+          {tasksWithDiffs.length > 0 ? (
+            <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
+              {totalDiffCount} person·task{totalDiffCount !== 1 ? 's' : ''} differ across weeks
+            </span>
+          ) : (
+            <span className="text-xs bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-full">all consistent</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onRefresh}
+            className="text-xs text-indigo-500 hover:text-indigo-700 px-2 py-0.5 rounded hover:bg-indigo-100"
+          >
+            ↺ Refresh
+          </button>
+          <button
+            onClick={onClose}
+            className="text-xs text-indigo-400 hover:text-indigo-600 px-2 py-0.5 rounded hover:bg-indigo-100"
+          >
+            ✕ Close
+          </button>
+        </div>
+      </div>
+
+      {tasksWithDiffs.length === 0 ? (
+        <p className="px-5 py-4 text-sm text-gray-400 italic">No differences found — all tasks are consistent across weeks.</p>
+      ) : (
+        <div className="divide-y divide-gray-100">
+          {tasksWithDiffs.map(({ taskId, taskName, taskColor, diffPersons }) => (
+            <div key={taskId} className="px-5 py-4">
+              {/* Task header */}
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: taskColor || '#6366f1' }} />
+                <span className="text-sm font-semibold text-gray-900">{taskName}</span>
+                <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
+                  {diffPersons.length} person{diffPersons.length !== 1 ? 's' : ''} differ
+                </span>
+              </div>
+
+              {/* Person tables */}
+              <div className="space-y-4 pl-5">
+                {diffPersons.map(({ pid, name, assignedWeeks, weeks, distHours, dayDiffersMap, totalDiffers }) => (
+                  <div key={pid}>
+                    <p className="text-xs font-medium text-gray-700 mb-1.5">{name}</p>
+                    <table className="text-xs border-collapse">
+                      <thead>
+                        <tr>
+                          <th className="text-left text-gray-400 font-medium pr-4 pb-1 min-w-10">Week</th>
+                          <th className={`text-center font-medium pb-1 w-14 pr-3 border-r border-gray-200 ${totalDiffers ? 'text-amber-600' : 'text-gray-400'}`}>
+                            Total{totalDiffers && <span className="ml-0.5 text-[9px]">▲</span>}
+                          </th>
+                          {COMPARE_DAYS.map((d) => (
+                            <th
+                              key={d.value}
+                              className={`text-center font-medium pb-1 w-14 ${dayDiffersMap[d.value] ? 'text-amber-600' : 'text-gray-400'}`}
+                            >
+                              {d.label}
+                              {dayDiffersMap[d.value] && <span className="ml-0.5 text-[9px]">▲</span>}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[1, 2, 3, 4].map((wn) => {
+                          const isAssigned = assignedWeeks.has(wn)
+                          const dh = weeks[wn] || {}
+                          const total = isAssigned ? (distHours[wn] ?? null) : null
+                          return (
+                            <tr key={wn}>
+                              <td className={`pr-4 py-0.5 font-medium ${isAssigned ? 'text-indigo-600' : 'text-gray-300'}`}>
+                                W{wn}
+                              </td>
+                              <td className={`text-center py-0.5 px-1 pr-3 border-r border-gray-200 rounded ${
+                                !isAssigned ? 'text-gray-300'
+                                : totalDiffers && total != null ? 'bg-amber-100 text-amber-800 font-semibold'
+                                : total != null ? 'text-gray-700'
+                                : 'text-gray-400'
+                              }`}>
+                                {!isAssigned ? '—' : total != null ? `${total}h` : '?'}
+                              </td>
+                              {COMPARE_DAYS.map(({ value: dow }) => {
+                                const val = isAssigned ? (dh[String(dow)] ?? dh[dow] ?? null) : null
+                                const differs = dayDiffersMap[dow] && isAssigned && val !== null
+                                return (
+                                  <td
+                                    key={dow}
+                                    className={`text-center py-0.5 px-1 rounded ${
+                                      !isAssigned
+                                        ? 'text-gray-300'
+                                        : differs
+                                          ? 'bg-amber-100 text-amber-800 font-semibold'
+                                          : val !== null
+                                            ? 'text-gray-700'
+                                            : 'text-gray-300'
+                                    }`}
+                                  >
+                                    {!isAssigned ? '—' : val !== null ? `${val}h` : 'auto'}
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Distribute Tab ─────────────────────────────────────────────────────────
 
 function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
   const [weekNumber, setWeekNumber] = useState(1)
   const [preview, setPreview] = useState(null)
+  const [weeklyIssues, setWeeklyIssues] = useState([])
+  const [postSaveShortfallWarnings, setPostSaveShortfallWarnings] = useState([]) // {week_number, message}
+  const [postSaveDailyWarnings, setPostSaveDailyWarnings] = useState([])         // {week_number, message}
   const [loading, setLoading] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [confirmed, setConfirmed] = useState(null) // stores {saved, effective_from}
   const [error, setError] = useState('')
   const [overrides, setOverrides] = useState({})
+  const fillTasks = tasks.filter((t) => t.is_fill)
+
+  const applyWeeklyPreviewState = (allWeeks, currentPreview) => {
+    setPreview(currentPreview)
+    setWeeklyIssues(
+      allWeeks.flatMap((weekPreview) =>
+        (weekPreview.tasks || [])
+          .filter((t) => !t.is_fill && (t.total_distributed || 0) + 0.1 < (t.target_hours || 0))
+          .map((t) => ({
+            week_number: weekPreview.week_number,
+            task_id: t.task_id,
+            task_name: t.task_name,
+            target_hours: t.target_hours,
+            total_distributed: t.total_distributed,
+            reason: t.warning_reason || t.warning || 'Not enough weekly capacity.',
+          }))
+      )
+    )
+    // clear post-save warnings when doing an explicit preview
+    setPostSaveShortfallWarnings([])
+    setPostSaveDailyWarnings([])
+  }
 
   const loadPreview = async () => {
     setLoading(true)
@@ -844,8 +1455,9 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
     setConfirmed(null)
     setOverrides({})
     try {
-      const data = await api.previewDistribution(weekNumber, effectiveFrom)
-      setPreview(data)
+      const allWeeks = await Promise.all([1, 2, 3, 4].map((wn) => api.previewDistribution(wn, effectiveFrom)))
+      const data = allWeeks[weekNumber - 1]
+      applyWeeklyPreviewState(allWeeks, data)
     } catch (e) {
       setError(e.message)
     }
@@ -872,11 +1484,45 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
     setConfirming(true)
     setError('')
     setConfirmed(null)
+    setWeeklyIssues([])
+    setPostSaveShortfallWarnings([])
+    setPostSaveDailyWarnings([])
     setPreview(null)
     try {
-      // week_number doesn't matter when week_only=false — backend iterates all 4
+      // Save first, then fetch all-week previews to surface every warning type
       const result = await api.confirmDistribution(1, effectiveFrom, null, false)
       setConfirmed(result)
+      const allWeeks = await Promise.all([1, 2, 3, 4].map((wn) => api.previewDistribution(wn, effectiveFrom)))
+
+      // Under-distributed / 0h tasks (covers both partial AND fully missing)
+      setWeeklyIssues(
+        allWeeks.flatMap((w) =>
+          (w.tasks || [])
+            .filter((t) => !t.is_fill && (t.total_distributed || 0) + 0.1 < (t.target_hours || 0))
+            .map((t) => ({
+              week_number: w.week_number,
+              task_id: t.task_id,
+              task_name: t.task_name,
+              target_hours: t.target_hours,
+              total_distributed: t.total_distributed || 0,
+              reason: t.warning_reason || t.warning || 'Not enough weekly capacity.',
+            }))
+        )
+      )
+
+      // Rule / hours shortfall warnings (e.g. "Task X: 2h short")
+      setPostSaveShortfallWarnings(
+        allWeeks.flatMap((w) =>
+          (w.warnings || []).map((msg) => ({ week_number: w.week_number, message: msg }))
+        )
+      )
+
+      // Day-placement / rule warnings (e.g. preferred-day pin couldn't fit, do_not_split violated)
+      setPostSaveDailyWarnings(
+        allWeeks.flatMap((w) =>
+          (w.daily_warnings || []).map((msg) => ({ week_number: w.week_number, message: msg }))
+        )
+      )
     } catch (e) {
       setError(e.message)
     }
@@ -889,6 +1535,14 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
 
   return (
     <div>
+      {fillTasks.length > 1 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="text-sm font-semibold text-amber-800">Multiple fill tasks selected</p>
+          <p className="text-sm text-amber-700">
+            Spare hours go to the first fill task in task order, so later fill tasks may receive nothing. Current fill tasks: {fillTasks.map((t) => t.name).join(', ')}.
+          </p>
+        </div>
+      )}
       <div className="flex items-center gap-4 mb-6 flex-wrap">
         <div className="flex gap-1">
           {[1, 2, 3, 4].map((wn) => (
@@ -919,7 +1573,7 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
         </button>
         <div className="flex items-center gap-2 ml-auto">
           <div className="flex flex-col gap-0.5">
-            <span className="text-xs text-gray-400">Effective from</span>
+            <span className="text-xs text-gray-400">Apply new calendar from Monday</span>
             <input
               type="date"
               value={effectiveFrom}
@@ -927,19 +1581,66 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
               className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
             />
           </div>
-          <span className="text-xs text-gray-400 mt-4">(snapped to Monday)</span>
+          <span className="text-xs text-gray-400 mt-4">Earlier weeks stay unchanged.</span>
         </div>
       </div>
 
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
 
+      {/* ── Warnings — always visible, from both Preview and Distribute & Save All ── */}
+
+      {/* Under-distributed tasks (0h or partial) — shown for all weeks */}
+      {weeklyIssues.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+          <p className="text-sm font-semibold text-amber-800 mb-2">Under-distributed tasks</p>
+          <div className="space-y-2">
+            {weeklyIssues.map((issue) => (
+              <div key={`${issue.week_number}:${issue.task_id}`} className="rounded-lg border border-amber-200 bg-white px-3 py-2">
+                <p className="text-sm font-medium text-gray-900">Week {issue.week_number}: {issue.task_name}</p>
+                <p className="text-sm text-amber-700">{issue.total_distributed}h distributed out of {issue.target_hours}h target</p>
+                <p className="text-xs text-gray-500">{issue.reason}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Post-save: shortfall warnings from all 4 weeks (rule/hours related) */}
+      {postSaveShortfallWarnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
+          <p className="text-sm font-semibold text-amber-800 mb-1">Hour shortfall warnings</p>
+          {postSaveShortfallWarnings.map((w, i) => (
+            <p key={i} className="text-sm text-amber-700">• Week {w.week_number}: {w.message}</p>
+          ))}
+        </div>
+      )}
+
+      {/* Post-save: day-placement / rule warnings from all 4 weeks */}
+      {postSaveDailyWarnings.length > 0 && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4">
+          <p className="text-sm font-semibold text-rose-800 mb-1">Day placement warnings</p>
+          {postSaveDailyWarnings.map((w, i) => (
+            <p key={i} className="text-sm text-rose-700">• Week {w.week_number}: {w.message}</p>
+          ))}
+        </div>
+      )}
+
       {preview && (
         <>
           {preview.warnings?.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
-              <p className="text-sm font-semibold text-amber-800 mb-1">Warnings</p>
+              <p className="text-sm font-semibold text-amber-800 mb-1">Hour shortfall warnings</p>
               {preview.warnings.map((w, i) => (
                 <p key={i} className="text-sm text-amber-700">• {w}</p>
+              ))}
+            </div>
+          )}
+
+          {preview.daily_warnings?.length > 0 && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-4">
+              <p className="text-sm font-semibold text-rose-800 mb-1">Day placement warnings</p>
+              {preview.daily_warnings.map((w, i) => (
+                <p key={i} className="text-sm text-rose-700">• {w}</p>
               ))}
             </div>
           )}
