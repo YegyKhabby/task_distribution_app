@@ -14,6 +14,7 @@ from routers.calendar import (
     _overlay_reallocations_on_tasks,
 )
 from utils.versioned import active_schedule_rows, active_distribution_rows
+from utils.supabase_retry import supabase_query
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -49,12 +50,11 @@ def _build_planned_week_rows(monday: date, week_start_offset: int) -> list[dict]
     friday = monday + timedelta(days=4)
     wn = _week_number_for_monday(monday, week_start_offset)
 
-    people_res = supabase.table("people").select("id, name").eq("active", True).order("name").execute()
-    all_people = people_res.data
+    all_people = supabase_query(lambda: supabase.table("people").select("id, name").eq("active", True).order("name").execute().data)
 
-    abs_rows = supabase.table("absences").select("person_id, date, reported_by").gte(
+    abs_rows = supabase_query(lambda: supabase.table("absences").select("person_id, date, reported_by").gte(
         "date", monday_str
-    ).lte("date", str(friday)).execute().data
+    ).lte("date", str(friday)).execute().data)
     holiday_dates = holiday_dates_from_absence_rows(abs_rows)
     holiday_dows = holiday_dows_for_week(monday, holiday_dates)
 
@@ -62,9 +62,9 @@ def _build_planned_week_rows(monday: date, week_start_offset: int) -> list[dict]
     for row in abs_rows:
         abs_by_pid[row["person_id"]].add(row["date"])
 
-    bulk_sched_raw = supabase.table("person_schedule").select(
+    bulk_sched_raw = supabase_query(lambda: supabase.table("person_schedule").select(
         "person_id, day_of_week, hours, location, valid_from, valid_until"
-    ).execute().data
+    ).execute().data)
     sched_rows_by_pid: dict[str, list[dict]] = defaultdict(list)
     for row in bulk_sched_raw:
         sched_rows_by_pid[row["person_id"]].append(row)
@@ -73,20 +73,20 @@ def _build_planned_week_rows(monday: date, week_start_offset: int) -> list[dict]
     for person_rows in sched_rows_by_pid.values():
         active_sched_rows.extend(active_schedule_rows(person_rows, monday_str))
 
-    bulk_dist_raw = supabase.table("task_distribution").select(
+    bulk_dist_raw = supabase_query(lambda: supabase.table("task_distribution").select(
         "person_id, task_id, hours_per_week, preferred_days, valid_from, "
         "tasks(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
-    ).eq("week_number", wn).execute().data
+    ).eq("week_number", wn).execute().data)
     bulk_dist = active_distribution_rows(bulk_dist_raw, monday_str)
 
-    bulk_realloc = supabase.table("temporary_reallocations").select(
+    bulk_realloc = supabase_query(lambda: supabase.table("temporary_reallocations").select(
         "week_start_date, covering_person_id, task_id, hours, "
         "task:task_id(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
-    ).eq("week_start_date", monday_str).execute().data
+    ).eq("week_start_date", monday_str).execute().data)
 
-    tp_res = supabase.table("task_people").select(
+    tp_res = supabase_query(lambda: supabase.table("task_people").select(
         "person_id, task_id, day_hours"
-    ).eq("week_number", wn).execute()
+    ).eq("week_number", wn).execute())
     day_hours_by_person_task = {
         (row["person_id"], row["task_id"]): row["day_hours"]
         for row in tp_res.data
@@ -182,14 +182,12 @@ def get_actual(week_start: str = Query(...)):
     """Return all actual_hours rows for Mon–Fri of the given week."""
     monday = date.fromisoformat(week_start)
     friday = monday + timedelta(days=4)
-    res = (
-        supabase.table("actual_hours")
+    res = supabase_query(lambda: supabase.table("actual_hours")
         .select("id, person_id, task_id, task_label, date, hours, created_at, people(id, name)")
         .gte("date", str(monday))
         .lte("date", str(friday))
         .order("date")
-        .execute()
-    )
+        .execute())
     return res.data
 
 
@@ -203,7 +201,7 @@ def create_actual(body: ActualHoursCreate):
     }
     if body.task_id:
         row["task_id"] = body.task_id
-    res = supabase.table("actual_hours").insert(row).execute()
+    res = supabase_query(lambda: supabase.table("actual_hours").insert(row).execute())
     return res.data[0]
 
 
@@ -216,13 +214,13 @@ def update_actual(entry_id: str, body: ActualHoursUpdate):
         patch["task_label"] = body.task_label
     if body.date is not None:
         patch["date"] = str(body.date)
-    res = supabase.table("actual_hours").update(patch).eq("id", entry_id).execute()
+    res = supabase_query(lambda: supabase.table("actual_hours").update(patch).eq("id", entry_id).execute())
     return res.data[0]
 
 
 @router.delete("/{entry_id}", status_code=204)
 def delete_actual(entry_id: str):
-    supabase.table("actual_hours").delete().eq("id", entry_id).execute()
+    supabase_query(lambda: supabase.table("actual_hours").delete().eq("id", entry_id).execute())
     return Response(status_code=204)
 
 
@@ -233,23 +231,19 @@ def get_actual_location(week_start: str = Query(...)):
     friday = monday + timedelta(days=4)
 
     # Explicit overrides for this week
-    overrides = (
-        supabase.table("actual_location")
+    overrides = supabase_query(lambda: supabase.table("actual_location")
         .select("person_id, date, location")
         .gte("date", str(monday))
         .lte("date", str(friday))
         .execute()
-        .data
-    )
+        .data)
     override_map = {(r["person_id"], r["date"]): r["location"] for r in overrides}
 
     # Schedule defaults (location per person per day_of_week)
-    sched_rows = (
-        supabase.table("person_schedule")
+    sched_rows = supabase_query(lambda: supabase.table("person_schedule")
         .select("person_id, day_of_week, location, valid_from, valid_until")
         .execute()
-        .data
-    )
+        .data)
     _sched_by_pid: dict = defaultdict(list)
     for r in sched_rows:
         _sched_by_pid[r["person_id"]].append(r)
@@ -262,7 +256,7 @@ def get_actual_location(week_start: str = Query(...)):
 
     # Build result: for every person × workday, return effective location.
     # Non-working days should stay empty instead of defaulting to office.
-    people = supabase.table("people").select("id").eq("active", True).execute().data
+    people = supabase_query(lambda: supabase.table("people").select("id").eq("active", True).execute().data)
     result = {}
     for p in people:
         pid = p["id"]
@@ -282,10 +276,10 @@ def get_actual_location(week_start: str = Query(...)):
 
 @router.put("/location")
 def upsert_actual_location(body: ActualLocationUpsert):
-    supabase.table("actual_location").upsert(
+    supabase_query(lambda: supabase.table("actual_location").upsert(
         {"person_id": body.person_id, "date": str(body.date), "location": body.location},
         on_conflict="person_id,date",
-    ).execute()
+    ).execute())
     return {"ok": True}
 
 
@@ -293,13 +287,11 @@ def _build_actual_excel_response(date_list: list[str]):
     if not date_list:
         return Response(status_code=400)
 
-    rows = (
-        supabase.table("actual_hours")
+    rows = supabase_query(lambda: supabase.table("actual_hours")
         .select("person_id, task_id, task_label, date, hours, people(name), tasks(name, color)")
         .in_("date", date_list)
         .execute()
-        .data
-    )
+        .data)
 
     # Collect all person names (sorted alphabetically)
     person_names = sorted({r["people"]["name"] for r in rows if r.get("people")})
@@ -440,22 +432,20 @@ def copy_week(body: CopyWeekRequest):
     friday = monday + timedelta(days=4)
 
     # Check if data already exists for this week
-    existing = (
-        supabase.table("actual_hours")
+    existing = supabase_query(lambda: supabase.table("actual_hours")
         .select("id", count="exact")
         .gte("date", str(monday))
         .lte("date", str(friday))
-        .execute()
-    )
+        .execute())
     if (existing.count or 0) > 0:
         if not body.force:
             return {"created": 0, "skipped": True}
         # force=True: delete existing rows and re-copy fresh
-        supabase.table("actual_hours").delete().gte("date", str(monday)).lte("date", str(friday)).execute()
+        supabase_query(lambda: supabase.table("actual_hours").delete().gte("date", str(monday)).lte("date", str(friday)).execute())
 
     rows_to_insert = _build_planned_week_rows(monday, body.week_start_offset)
 
     if rows_to_insert:
-        supabase.table("actual_hours").insert(rows_to_insert).execute()
+        supabase_query(lambda: supabase.table("actual_hours").insert(rows_to_insert).execute())
 
     return {"created": len(rows_to_insert), "skipped": False}

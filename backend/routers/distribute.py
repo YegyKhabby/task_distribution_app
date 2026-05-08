@@ -4,33 +4,15 @@ from models import DistributeRequest
 from collections import defaultdict
 from datetime import date, timedelta
 from utils.versioned import active_schedule_rows, next_monday
+from utils.supabase_retry import supabase_query
 from typing import Optional
 from routers.calendar import distribute_week, holiday_dates_from_absence_rows, holiday_dows_for_week
-import time
-import httpx
 
 router = APIRouter(prefix="/distribute", tags=["distribute"])
 
 
 def round_half(val: float) -> float:
     return round(val * 2) / 2
-
-
-def supabase_query(fn, max_attempts: int = 3, base_delay: float = 0.3):
-    """Run a Supabase query, retrying on transient network errors (httpx.ReadError / EAGAIN)."""
-    last_exc = None
-    for attempt in range(max_attempts):
-        try:
-            return fn()
-        except httpx.ReadError as e:
-            last_exc = e
-            if attempt < max_attempts - 1:
-                time.sleep(base_delay * (attempt + 1))
-        except httpx.TransportError as e:
-            last_exc = e
-            if attempt < max_attempts - 1:
-                time.sleep(base_delay * (attempt + 1))
-    raise last_exc
 
 
 def fetch_all(week_number: int, week_start_date: date):
