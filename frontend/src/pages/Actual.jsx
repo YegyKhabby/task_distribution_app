@@ -541,6 +541,7 @@ export default function Actual() {
   const [loading, setLoading] = useState(true)
   const [addingFor, setAddingFor] = useState(null)
   const [copyState, setCopyState] = useState('idle')
+  const [copyFeedback, setCopyFeedback] = useState(null)
   const [exportDays, setExportDays] = useState([0, 1, 2, 3, 4])
   const [locations, setLocations] = useState({}) // { person_id: { date: 'office'|'home' } }
 
@@ -558,12 +559,14 @@ export default function Actual() {
 
   const reload = useCallback(() => {
     setLoading(true)
-    Promise.all([
+    return Promise.all([
       api.getActual(selectedWeek),
       api.getActualLocation(selectedWeek),
     ]).then(([d, loc]) => {
       setEntries(d)
       setLocations(loc)
+      setLoading(false)
+    }).catch(() => {
       setLoading(false)
     })
   }, [selectedWeek])
@@ -585,6 +588,7 @@ export default function Actual() {
 
   useEffect(() => {
     setCopyState('idle')
+    setCopyFeedback(null)
     setAddingFor(null)
     reload()
   }, [reload])
@@ -602,19 +606,44 @@ export default function Actual() {
   async function handleCopy() {
     if (hasData && copyState === 'idle') {
       setCopyState('confirm')
+      setCopyFeedback(null)
       return
     }
     setCopyState('copying')
-    await api.copyActualWeek(selectedWeek, false, getWeekStartOffset())
-    reload()
-    setCopyState('idle')
+    setCopyFeedback(null)
+    try {
+      const result = await api.copyActualWeek(selectedWeek, false, getWeekStartOffset())
+      await reload()
+      if (result?.skipped) {
+        setCopyFeedback({ tone: 'warn', text: 'This week already has actual entries. Use Proceed to replace them.' })
+      } else if ((result?.created || 0) > 0) {
+        setCopyFeedback({ tone: 'success', text: `Copied ${result.created} planned entries.` })
+      } else {
+        setCopyFeedback({ tone: 'warn', text: 'No planned hours were available to copy for this week.' })
+      }
+    } catch (e) {
+      setCopyFeedback({ tone: 'error', text: e.message || 'Copy from planned failed.' })
+    } finally {
+      setCopyState('idle')
+    }
   }
 
   async function handleCopyForce() {
     setCopyState('copying')
-    await api.copyActualWeek(selectedWeek, true, getWeekStartOffset())
-    reload()
-    setCopyState('idle')
+    setCopyFeedback(null)
+    try {
+      const result = await api.copyActualWeek(selectedWeek, true, getWeekStartOffset())
+      await reload()
+      if ((result?.created || 0) > 0) {
+        setCopyFeedback({ tone: 'success', text: `Replaced the week with ${result.created} copied planned entries.` })
+      } else {
+        setCopyFeedback({ tone: 'warn', text: 'Existing entries were cleared, but no planned hours were available to copy.' })
+      }
+    } catch (e) {
+      setCopyFeedback({ tone: 'error', text: e.message || 'Replacing from planned failed.' })
+    } finally {
+      setCopyState('idle')
+    }
   }
 
   async function handleToggleLocation(personId, dateStr) {
@@ -748,6 +777,19 @@ export default function Actual() {
             </button>
           </div>
         </div>
+        {copyFeedback && (
+          <div
+            className={`mt-3 rounded-lg border px-3 py-2 text-sm ${
+              copyFeedback.tone === 'success'
+                ? 'border-green-200 bg-green-50 text-green-700'
+                : copyFeedback.tone === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-700'
+                  : 'border-amber-200 bg-amber-50 text-amber-700'
+            }`}
+          >
+            {copyFeedback.text}
+          </div>
+        )}
       </div>
 
       {loading ? (

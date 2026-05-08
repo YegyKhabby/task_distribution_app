@@ -6,8 +6,14 @@ from datetime import date, timedelta
 import calendar as cal_module
 from io import BytesIO
 from models import ActualHoursCreate, ActualHoursUpdate, CopyWeekRequest, ActualLocationUpsert
-from routers.calendar import _compute_day_view
-from utils.versioned import active_schedule_rows
+from routers.calendar import (
+    distribute_week,
+    get_mondays_in_month,
+    holiday_dates_from_absence_rows,
+    holiday_dows_for_week,
+    _overlay_reallocations_on_tasks,
+)
+from utils.versioned import active_schedule_rows, active_distribution_rows
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -27,6 +33,148 @@ def _lighten(hex6: str, factor: float = 0.91) -> str:
     g2 = int(g + (255 - g) * factor)
     b2 = int(b + (255 - b) * factor)
     return f"{r2:02X}{g2:02X}{b2:02X}"
+
+
+def _week_number_for_monday(monday: date, week_start_offset: int) -> int:
+    all_mondays = get_mondays_in_month(monday.year, monday.month)
+    try:
+        i = all_mondays.index(monday)
+        return ((i + week_start_offset - 1) % 4) + 1
+    except ValueError:
+        return week_start_offset
+
+
+def _build_planned_week_rows(monday: date, week_start_offset: int) -> list[dict]:
+    monday_str = str(monday)
+    friday = monday + timedelta(days=4)
+    wn = _week_number_for_monday(monday, week_start_offset)
+
+    people_res = supabase.table("people").select("id, name").eq("active", True).order("name").execute()
+    all_people = people_res.data
+
+    abs_rows = supabase.table("absences").select("person_id, date, reported_by").gte(
+        "date", monday_str
+    ).lte("date", str(friday)).execute().data
+    holiday_dates = holiday_dates_from_absence_rows(abs_rows)
+    holiday_dows = holiday_dows_for_week(monday, holiday_dates)
+
+    abs_by_pid: dict[str, set[str]] = defaultdict(set)
+    for row in abs_rows:
+        abs_by_pid[row["person_id"]].add(row["date"])
+
+    bulk_sched_raw = supabase.table("person_schedule").select(
+        "person_id, day_of_week, hours, location, valid_from, valid_until"
+    ).execute().data
+    sched_rows_by_pid: dict[str, list[dict]] = defaultdict(list)
+    for row in bulk_sched_raw:
+        sched_rows_by_pid[row["person_id"]].append(row)
+
+    active_sched_rows = []
+    for person_rows in sched_rows_by_pid.values():
+        active_sched_rows.extend(active_schedule_rows(person_rows, monday_str))
+
+    bulk_dist_raw = supabase.table("task_distribution").select(
+        "person_id, task_id, hours_per_week, preferred_days, valid_from, "
+        "tasks(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
+    ).eq("week_number", wn).execute().data
+    bulk_dist = active_distribution_rows(bulk_dist_raw, monday_str)
+
+    bulk_realloc = supabase.table("temporary_reallocations").select(
+        "week_start_date, covering_person_id, task_id, hours, "
+        "task:task_id(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
+    ).eq("week_start_date", monday_str).execute().data
+
+    tp_res = supabase.table("task_people").select(
+        "person_id, task_id, day_hours"
+    ).eq("week_number", wn).execute()
+    day_hours_by_person_task = {
+        (row["person_id"], row["task_id"]): row["day_hours"]
+        for row in tp_res.data
+        if row.get("day_hours")
+    }
+
+    sched_by_pid: dict[str, list[dict]] = defaultdict(list)
+    for row in active_sched_rows:
+        sched_by_pid[row["person_id"]].append(row)
+
+    dist_by_pid: dict[str, list[dict]] = defaultdict(list)
+    for row in bulk_dist:
+        dist_by_pid[row["person_id"]].append(row)
+
+    realloc_by_pid: dict[str, list[dict]] = defaultdict(list)
+    for row in bulk_realloc:
+        realloc_by_pid[row["covering_person_id"]].append(row)
+
+    rows_to_insert = []
+    for person in all_people:
+        pid = person["id"]
+        pname = person["name"]
+
+        week_schedule = {
+            row["day_of_week"]: row["hours"]
+            for row in sched_by_pid[pid]
+            if row["hours"] > 0 and row["day_of_week"] not in holiday_dows
+        }
+        if not week_schedule:
+            continue
+
+        tasks_list = []
+        preferred_days = {}
+        for row in dist_by_pid[pid]:
+            tasks_list.append({
+                "task_id": row["task_id"],
+                "task_name": row["tasks"]["name"],
+                "task_color": row["tasks"].get("color"),
+                "responsible_person": row["tasks"].get("responsible_person"),
+                "hours_per_week": row["hours_per_week"],
+                "schedule_rule": row["tasks"].get("schedule_rule"),
+                "is_fill": row["tasks"].get("is_fill", False),
+                "priority": row["tasks"].get("priority"),
+            })
+            if row.get("preferred_days"):
+                preferred_days[row["task_id"]] = row["preferred_days"]
+
+        tasks_list = _overlay_reallocations_on_tasks(tasks_list, realloc_by_pid[pid])
+        task_map = {task["task_id"]: task for task in tasks_list}
+
+        person_day_hours = {}
+        for row in dist_by_pid[pid]:
+            day_hours = day_hours_by_person_task.get((pid, row["task_id"]))
+            if day_hours:
+                person_day_hours[row["task_id"]] = {int(k): v for k, v in day_hours.items()}
+
+        allocations, _warnings = distribute_week(
+            tasks_list,
+            week_schedule,
+            pname,
+            preferred_days,
+            day_hours_map=person_day_hours or None,
+            blocked_days=holiday_dows,
+        )
+
+        for dow in range(1, 6):
+            day_date = monday + timedelta(days=dow - 1)
+            day_str = str(day_date)
+            if day_str in abs_by_pid[pid]:
+                continue
+            if not week_schedule.get(dow, 0):
+                continue
+
+            for task_id, hours in allocations.get(dow, {}).items():
+                if hours <= 0:
+                    continue
+                task_meta = task_map.get(task_id)
+                if not task_meta:
+                    continue
+                rows_to_insert.append({
+                    "person_id": pid,
+                    "task_id": task_id,
+                    "task_label": task_meta["task_name"],
+                    "date": day_str,
+                    "hours": hours,
+                })
+
+    return rows_to_insert
 
 
 @router.get("")
@@ -287,7 +435,7 @@ def export_actual_month_excel(year: int = Query(...), month: int = Query(..., ge
 
 @router.post("/copy-week")
 def copy_week(body: CopyWeekRequest):
-    """Populate actual_hours directly from the Calendar's computed day views."""
+    """Populate actual_hours from the planner's weekly allocations for the selected week."""
     monday = body.week_start
     friday = monday + timedelta(days=4)
 
@@ -305,29 +453,7 @@ def copy_week(body: CopyWeekRequest):
         # force=True: delete existing rows and re-copy fresh
         supabase.table("actual_hours").delete().gte("date", str(monday)).lte("date", str(friday)).execute()
 
-    # Build person name → id map
-    people_res = supabase.table("people").select("id, name").eq("active", True).execute()
-    name_to_id = {p["name"]: p["id"] for p in people_res.data}
-
-    rows_to_insert = []
-    for i in range(5):  # Mon–Fri
-        day_date = monday + timedelta(days=i)
-        view = _compute_day_view(day_date, body.week_start_offset)
-        for task in view["tasks"]:
-            tid = task["task_id"]
-            tname = task["task_name"]
-            for person_entry in task["people"]:
-                pname = person_entry["person_name"]
-                hrs = person_entry["hours"]
-                pid = name_to_id.get(pname)
-                if pid and hrs > 0:
-                    rows_to_insert.append({
-                        "person_id":  pid,
-                        "task_id":    tid,
-                        "task_label": tname,
-                        "date":       str(day_date),
-                        "hours":      hrs,
-                    })
+    rows_to_insert = _build_planned_week_rows(monday, body.week_start_offset)
 
     if rows_to_insert:
         supabase.table("actual_hours").insert(rows_to_insert).execute()
