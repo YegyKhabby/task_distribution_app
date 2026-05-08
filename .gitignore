@@ -17,3 +17,13 @@ dist/
 
 # Generated exports
 *.xlsx
+
+# Local-only Deskbird tooling
+backend/routers/attendance.py
+frontend/src/pages/DeskbirdAttendance.jsx
+tools/.deskbird_schedule_state.json
+tools/com.taskdist.deskbird-email.plist
+tools/com.taskdist.deskbird-email.plist.example
+tools/deskbird_report.py
+tools/run_deskbird_schedule.py
+tools/send_deskbird_daily.sh
