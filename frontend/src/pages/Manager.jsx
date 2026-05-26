@@ -201,6 +201,18 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
 
   useEffect(() => { loadWeekData(weekNumber) }, [weekNumber, loadWeekData])
 
+  // Auto-detect "All weeks" mode: tasks where all 4 weeks have equal hours
+  useEffect(() => {
+    if (!allWeekSettings.length) return
+    const taskIds = [...new Set(allWeekSettings.map(s => s.task_id))]
+    const allWeeksIds = taskIds.filter(taskId => {
+      const settings = allWeekSettings.filter(s => s.task_id === taskId)
+      return settings.length === 4 &&
+        settings.every(s => Math.abs(s.weekly_hours_target - settings[0].weekly_hours_target) < 0.001)
+    })
+    setThisWeekOnly(new Set(allWeeksIds))
+  }, [allWeekSettings])
+
   const switchWeek = (wn) => {
     setWeekNumber(wn)
     setWeekAssignments([])
@@ -359,7 +371,12 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     }
     try {
       if (editing === 'new') {
-        await api.createTask(globalData)
+        const created = await api.createTask(globalData)
+        if (!globalData.is_fill && targetValue > 0) {
+          await Promise.all([1, 2, 3, 4].map(wn =>
+            api.updateTaskWeekSettings(created.id, wn, targetValue)
+          ))
+        }
         setEditing(null)
         setExpanded(null)
       } else {
