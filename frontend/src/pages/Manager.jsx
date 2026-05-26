@@ -1078,7 +1078,7 @@ function TaskForm({ form, setForm, error, onSave, onCancel, onAutoSave, isNew, w
       {error && <span className="text-red-500 text-xs w-full">{error}</span>}
       {isNew && (
         <>
-          <button onClick={onSave} className="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700 self-end">Add</button>
+          <button onClick={() => onSave()} className="bg-indigo-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-indigo-700 self-end">Add</button>
           <button onClick={onCancel} className="text-gray-500 px-3 py-1.5 rounded-md text-sm hover:bg-gray-100 self-end">Cancel</button>
         </>
       )}
