@@ -233,6 +233,14 @@ def distribute_week(
                     day_hrs = round_half(hrs * schedule[dow] / total_sched)
                     rem = round_half(rem - day_hrs)
                 alloc(dow, tid, day_hrs)
+            # Fallback: if capacity was exhausted on some days, place remaining
+            # hours on whatever days still have capacity (greedy, highest cap first).
+            still_rem = round_half(hrs - sum(allocations[d].get(tid, 0.0) for d in work_dows))
+            for dow in sorted(work_dows, key=lambda d: day_capacity[d], reverse=True):
+                if still_rem <= 0:
+                    break
+                alloc(dow, tid, still_rem)
+                still_rem = round_half(hrs - sum(allocations[d].get(tid, 0.0) for d in work_dows))
 
         allocated_total = round_half(sum(allocations[d].get(tid, 0.0) for d in work_dows))
         allocated_days = [d for d in work_dows if round_half(allocations[d].get(tid, 0.0)) > 0]
