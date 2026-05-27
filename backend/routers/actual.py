@@ -239,6 +239,16 @@ def get_actual_location(week_start: str = Query(...)):
         .data)
     override_map = {(r["person_id"], r["date"]): r["location"] for r in overrides}
 
+    # Sick/vacation absences for this week — auto-show unless manually overridden
+    abs_rows = supabase_query(lambda: supabase.table("absences")
+        .select("person_id, date, type")
+        .gte("date", str(monday))
+        .lte("date", str(friday))
+        .in_("type", ["sick", "vacation"])
+        .execute()
+        .data)
+    absence_map = {(r["person_id"], r["date"]): r["type"] for r in abs_rows}
+
     # Schedule defaults (location per person per day_of_week)
     sched_rows = supabase_query(lambda: supabase.table("person_schedule")
         .select("person_id, day_of_week, location, valid_from, valid_until")
@@ -268,8 +278,12 @@ def get_actual_location(week_start: str = Query(...)):
             default = sched_map.get(pid, {}).get(dow)
             if default is None:
                 result[pid][d_str] = None
+            elif (pid, d_str) in override_map:
+                result[pid][d_str] = override_map[(pid, d_str)]
+            elif (pid, d_str) in absence_map:
+                result[pid][d_str] = absence_map[(pid, d_str)]
             else:
-                result[pid][d_str] = override_map.get((pid, d_str), default)
+                result[pid][d_str] = default
 
     return result
 

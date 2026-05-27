@@ -646,15 +646,12 @@ export default function Actual() {
     }
   }
 
-  async function handleToggleLocation(personId, dateStr) {
-    const current = locations[personId]?.[dateStr] ?? null
-    if (current == null) return
-    const next = current === 'office' ? 'home' : 'office'
+  async function handleSetLocation(personId, dateStr, value) {
     setLocations((prev) => ({
       ...prev,
-      [personId]: { ...prev[personId], [dateStr]: next },
+      [personId]: { ...prev[personId], [dateStr]: value },
     }))
-    await api.upsertActualLocation(personId, dateStr, next)
+    await api.upsertActualLocation(personId, dateStr, value)
   }
 
   function handleExport() {
@@ -844,26 +841,31 @@ export default function Actual() {
                       <td className="px-4 py-0.5 text-xs text-gray-400">Location</td>
                       {weekDates.map((d) => {
                         const loc = locations[person.id]?.[d] ?? null
-                        const isHome = loc === 'home'
-                        const isOff = loc == null
                         return (
                           <td key={d} className="px-1 py-0.5 text-center">
-                            {isOff ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                            {loc == null ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
                                 Off
                               </span>
                             ) : (
-                              <button
-                                onClick={() => handleToggleLocation(person.id, d)}
-                                title={isHome ? 'Home — click to switch to office' : 'Office — click to switch to home'}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium transition-colors ${
-                                  isHome
-                                    ? 'bg-sky-100 text-sky-700 hover:bg-sky-200'
-                                    : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                              <select
+                                value={loc}
+                                onChange={(e) => handleSetLocation(person.id, d, e.target.value)}
+                                className={`text-xs font-medium rounded-full px-2 py-0.5 border-0 cursor-pointer focus:ring-1 focus:ring-offset-0 ${
+                                  loc === 'sick'
+                                    ? 'bg-red-100 text-red-600'
+                                    : loc === 'vacation'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : loc === 'home'
+                                    ? 'bg-sky-100 text-sky-700'
+                                    : 'bg-indigo-50 text-indigo-600'
                                 }`}
                               >
-                                {isHome ? '🏠' : '🏢'}
-                              </button>
+                                <option value="office">🏢 Office</option>
+                                <option value="home">🏠 Home</option>
+                                <option value="sick">Sick</option>
+                                <option value="vacation">Vacation</option>
+                              </select>
                             )}
                           </td>
                         )
