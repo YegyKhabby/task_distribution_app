@@ -1760,6 +1760,11 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
                 {confirmed.saved} rows saved — effective from {confirmed.effective_from}.
               </span>
             )}
+            {confirmed?.warning && (
+              <span className="text-amber-600 text-sm font-medium block mt-1">
+                ⚠ {confirmed.warning}
+              </span>
+            )}
           </div>
         </>
       )}

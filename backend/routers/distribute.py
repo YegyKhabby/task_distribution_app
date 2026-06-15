@@ -459,4 +459,12 @@ def confirm_distribution(body: DistributeRequest):
     if total_saved == 0:
         raise HTTPException(400, "Nothing to save — assign people to tasks first")
 
-    return {"saved": total_saved, "effective_from": effective_from_str}
+    total_rows = supabase.table("task_distribution").select("id", count="exact").execute().count
+    warning = None
+    if total_rows and total_rows >= 8000:
+        warning = (
+            f"Distribution history has reached {total_rows} rows (limit is 10,000). "
+            "Please contact Yeganeh to run a cleanup of old versions."
+        )
+
+    return {"saved": total_saved, "effective_from": effective_from_str, "warning": warning}
