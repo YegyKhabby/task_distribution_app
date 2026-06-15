@@ -4,18 +4,34 @@ from typing import Optional
 from datetime import date
 from models import PreferredDayUpdate
 from utils.versioned import active_distribution_rows
+from utils.supabase_retry import supabase_query
 
 router = APIRouter(prefix="/distribution", tags=["distribution"])
 
 
+def _fetch_distribution_rows(week_number: Optional[int] = None) -> list[dict]:
+    rows = []
+    start = 0
+    page_size = 1000
+
+    while True:
+        q = supabase.table("task_distribution").select(
+            "*, people(name), tasks(name, color, priority)"
+        ).range(start, start + page_size - 1)
+        if week_number is not None:
+            q = q.eq("week_number", week_number)
+        batch = supabase_query(lambda: q.execute().data)
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        start += page_size
+
+    return rows
+
+
 @router.get("")
 def get_distribution(week_number: Optional[int] = None, week_start: Optional[date] = None):
-    q = supabase.table("task_distribution").select(
-        "*, people(name), tasks(name, color, priority)"
-    )
-    if week_number is not None:
-        q = q.eq("week_number", week_number)
-    rows = q.execute().data
+    rows = _fetch_distribution_rows(week_number)
     effective_date = str(week_start or date.today())
 
     if week_number is not None:

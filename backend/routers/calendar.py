@@ -682,7 +682,7 @@ def get_calendar_export_data(year: int = Query(...), month: int = Query(...), we
     bulk_sched_raw = supabase.table("person_schedule").select("person_id, day_of_week, hours, location, valid_from, valid_until").execute().data
     bulk_dist_raw  = supabase.table("task_distribution").select(
         "person_id, week_number, task_id, hours_per_week, preferred_days, valid_from, tasks(id, name, color, schedule_rule, is_fill, priority)"
-    ).execute().data
+    ).limit(10000).execute().data
     bulk_realloc_raw = supabase.table("temporary_reallocations").select(
         "week_start_date, covering_person_id, task_id, hours, task:task_id(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
     ).gte("week_start_date", str(last_monday_prev)).lte("week_start_date", str(abs_end)).execute().data
@@ -867,7 +867,7 @@ def export_calendar_excel(year: int = Query(...), month: int = Query(...), week_
     bulk_sched_raw2 = supabase.table("person_schedule").select("person_id, day_of_week, hours, location, valid_from, valid_until").execute().data
     bulk_dist_raw2  = supabase.table("task_distribution").select(
         "person_id, week_number, task_id, hours_per_week, preferred_days, valid_from, tasks(id, name, color, schedule_rule, is_fill, priority)"
-    ).execute().data
+    ).limit(10000).execute().data
     bulk_realloc_raw2 = supabase.table("temporary_reallocations").select(
         "week_start_date, covering_person_id, task_id, hours, task:task_id(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
     ).gte("week_start_date", str(last_monday_prev)).lte("week_start_date", str(abs_end)).execute().data
