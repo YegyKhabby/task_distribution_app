@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -182,6 +182,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   const [compareAllOpen, setCompareAllOpen] = useState(false)
   const [compareAllData, setCompareAllData] = useState(null)
   const [compareAllLoading, setCompareAllLoading] = useState(false)
+  const taskSaveQueueRef = useRef(Promise.resolve())
 
   // ── Load week assignments + distribution ──
   const loadWeekData = useCallback(async (wn) => {
@@ -431,7 +432,9 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     if (editing === 'new') return
     const newForm = { ...form, ...updatedFields }
     setForm(newForm)
-    save(newForm)
+    taskSaveQueueRef.current = taskSaveQueueRef.current
+      .catch(() => {})
+      .then(() => save(newForm))
   }
 
   const remove = async (id) => {
