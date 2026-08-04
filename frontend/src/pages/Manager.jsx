@@ -220,7 +220,15 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setDistribution([])
     setWeekFixedHours([])
     setWeekSettings([])
-    setThisWeekOnly(new Set()) // reset per-task scope toggles on week change
+    setThisWeekOnly(new Set())
+    if (editing && editing !== 'new') {
+      const override = allWeekSettings.find(s => s.task_id === editing && s.week_number === wn)
+      const globalTask = tasks.find(t => t.id === editing)
+      if (globalTask) {
+        const hours = override != null ? override.weekly_hours_target : globalTask.weekly_hours_target
+        setForm(prev => ({ ...prev, weekly_hours_target: hours }))
+      }
+    }
   }
 
   // ── Load per-week distribution totals + under-distribution warnings ──
