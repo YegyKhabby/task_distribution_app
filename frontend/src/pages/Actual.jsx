@@ -242,11 +242,12 @@ function exportActualWorkbook({ dates, entries, people, tasks, locations, filena
     columns.forEach((entry, idx) => {
       if (entry.type === 'day') {
         const loc = locations[personId]?.[entry.date] ?? null
-        const isHome = loc === 'home'
-        const isOff = loc == null
-        setCell(row, 1 + idx, isOff ? 'Off' : (isHome ? 'Home' : 'Office'), 's', {
-          fill: { fgColor: { rgb: isOff ? 'F3F4F6' : (isHome ? 'CCFBF1' : 'E0E7FF') } },
-          font: { sz: 9, color: { rgb: isOff ? '6B7280' : (isHome ? '0F766E' : '3730A3') } },
+        const locLabel = loc == null ? 'Off' : loc === 'home' ? 'Home' : loc === 'sick' ? 'Sick' : loc === 'vacation' ? 'Vacation' : 'Office'
+        const locBg = loc == null ? 'F3F4F6' : loc === 'home' ? 'CCFBF1' : loc === 'sick' ? 'FEE2E2' : loc === 'vacation' ? 'FEF3C7' : 'E0E7FF'
+        const locFg = loc == null ? '6B7280' : loc === 'home' ? '0F766E' : loc === 'sick' ? 'DC2626' : loc === 'vacation' ? 'B45309' : '3730A3'
+        setCell(row, 1 + idx, locLabel, 's', {
+          fill: { fgColor: { rgb: locBg } },
+          font: { sz: 9, color: { rgb: locFg } },
           alignment: { horizontal: 'center', vertical: 'center' },
         })
       } else {
