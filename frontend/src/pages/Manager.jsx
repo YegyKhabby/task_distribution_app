@@ -165,6 +165,9 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   const [weekFixedHours, setWeekFixedHours] = useState([])
   const [weekSettings, setWeekSettings] = useState([])
   const [thisWeekOnly, setThisWeekOnly] = useState(new Set())
+  // Tracks tasks the user has explicitly toggled to "Week X only" — prevents
+  // the auto-detect effect from reverting a manual toggle after each save.
+  const manualWeekOnly = useRef(new Set())
 
   // ── Hours summary state ──
   const [distAvg, setDistAvg] = useState(null)
@@ -202,11 +205,13 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
 
   useEffect(() => { loadWeekData(weekNumber) }, [weekNumber, loadWeekData])
 
-  // Auto-detect "All weeks" mode: tasks where all 4 weeks have equal hours
+  // Auto-detect "All weeks" mode: tasks where all 4 weeks have equal hours.
+  // Skips tasks the user has manually toggled to "Week X only" this session.
   useEffect(() => {
     if (!allWeekSettings.length) return
     const taskIds = [...new Set(allWeekSettings.map(s => s.task_id))]
     const allWeeksIds = taskIds.filter(taskId => {
+      if (manualWeekOnly.current.has(taskId)) return false
       const settings = allWeekSettings.filter(s => s.task_id === taskId)
       return settings.length === 4 &&
         settings.every(s => Math.abs(s.weekly_hours_target - settings[0].weekly_hours_target) < 0.001)
@@ -221,6 +226,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setWeekFixedHours([])
     setWeekSettings([])
     setThisWeekOnly(new Set())
+    manualWeekOnly.current.clear()
     if (editing && editing !== 'new') {
       const override = allWeekSettings.find(s => s.task_id === editing && s.week_number === wn)
       const globalTask = tasks.find(t => t.id === editing)
@@ -494,8 +500,13 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   const toggleThisWeekOnly = (taskId) => {
     setThisWeekOnly(prev => {
       const next = new Set(prev)
-      if (next.has(taskId)) next.delete(taskId)
-      else next.add(taskId)
+      if (next.has(taskId)) {
+        next.delete(taskId)
+        manualWeekOnly.current.add(taskId)    // user explicitly chose "Week X only"
+      } else {
+        next.add(taskId)
+        manualWeekOnly.current.delete(taskId) // user switched back to "All weeks"
+      }
       return next
     })
   }
