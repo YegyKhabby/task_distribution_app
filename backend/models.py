@@ -130,7 +130,7 @@ class ActualHoursCreate(BaseModel):
 class ActualHoursUpdate(BaseModel):
     hours: Optional[float] = None
     task_label: Optional[str] = None
-    date: Optional[date] = None
+    entry_date: Optional[date] = None
 
 
 class CopyWeekRequest(BaseModel):

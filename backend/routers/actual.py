@@ -205,25 +205,6 @@ def create_actual(body: ActualHoursCreate):
     return res.data[0]
 
 
-@router.put("/{entry_id}")
-def update_actual(entry_id: str, body: ActualHoursUpdate):
-    patch = {}
-    if body.hours is not None:
-        patch["hours"] = body.hours
-    if body.task_label is not None:
-        patch["task_label"] = body.task_label
-    if body.date is not None:
-        patch["date"] = str(body.date)
-    res = supabase_query(lambda: supabase.table("actual_hours").update(patch).eq("id", entry_id).execute())
-    return res.data[0]
-
-
-@router.delete("/{entry_id}", status_code=204)
-def delete_actual(entry_id: str):
-    supabase_query(lambda: supabase.table("actual_hours").delete().eq("id", entry_id).execute())
-    return Response(status_code=204)
-
-
 @router.get("/location")
 def get_actual_location(week_start: str = Query(...)):
     """Return actual_location rows for Mon–Fri of the given week, merged with schedule defaults."""
@@ -295,6 +276,25 @@ def upsert_actual_location(body: ActualLocationUpsert):
         on_conflict="person_id,date",
     ).execute())
     return {"ok": True}
+
+
+@router.put("/{entry_id}")
+def update_actual(entry_id: str, body: ActualHoursUpdate):
+    patch = {}
+    if body.hours is not None:
+        patch["hours"] = body.hours
+    if body.task_label is not None:
+        patch["task_label"] = body.task_label
+    if body.entry_date is not None:
+        patch["date"] = str(body.entry_date)
+    res = supabase_query(lambda: supabase.table("actual_hours").update(patch).eq("id", entry_id).execute())
+    return res.data[0]
+
+
+@router.delete("/{entry_id}", status_code=204)
+def delete_actual(entry_id: str):
+    supabase_query(lambda: supabase.table("actual_hours").delete().eq("id", entry_id).execute())
+    return Response(status_code=204)
 
 
 def _build_actual_excel_response(date_list: list[str]):
