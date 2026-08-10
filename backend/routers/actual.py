@@ -259,10 +259,10 @@ def get_actual_location(week_start: str = Query(...)):
             default = sched_map.get(pid, {}).get(dow)
             if default is None:
                 result[pid][d_str] = None
-            elif (pid, d_str) in override_map:
-                result[pid][d_str] = override_map[(pid, d_str)]
             elif (pid, d_str) in absence_map:
                 result[pid][d_str] = absence_map[(pid, d_str)]
+            elif (pid, d_str) in override_map:
+                result[pid][d_str] = override_map[(pid, d_str)]
             else:
                 result[pid][d_str] = default
 
