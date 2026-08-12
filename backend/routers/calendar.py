@@ -26,14 +26,14 @@ def norm(name: str) -> str:
 # ── Rule-based distribution ───────────────────────────────────────────────────
 
 RULE_PRIORITY = {
-    "do_not_split":  1,
-    "one_day":       2,
-    "first_work_day": 3,
-    "two_days":      4,
-    "flexible_days": 5,
-    "proportional":  6,
-    "equal_per_day": 7,
-    None:            8,
+    "first_work_day": 1,  # pinned to one specific day — most constrained, must go first
+    "do_not_split":   2,
+    "one_day":        3,
+    "two_days":       4,
+    "flexible_days":  5,
+    "proportional":   6,
+    "equal_per_day":  7,
+    None:             8,
 }
 
 

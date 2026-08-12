@@ -165,9 +165,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   const [weekFixedHours, setWeekFixedHours] = useState([])
   const [weekSettings, setWeekSettings] = useState([])
   const [thisWeekOnly, setThisWeekOnly] = useState(new Set())
-  // Tracks tasks the user has explicitly toggled to "Week X only" — prevents
-  // the auto-detect effect from reverting a manual toggle after each save.
-  const manualWeekOnly = useRef(new Set())
+  const [allAssignments, setAllAssignments] = useState([])
 
   // ── Hours summary state ──
   const [distAvg, setDistAvg] = useState(null)
@@ -189,35 +187,37 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
 
   // ── Load week assignments + distribution ──
   const loadWeekData = useCallback(async (wn) => {
-    const [a, d, f, s, all] = await Promise.all([
+    const [a, d, f, s, all, allA] = await Promise.all([
       api.getAssignments(wn),
       api.getDistribution(wn),
       api.getFixedHours(null, wn),
       api.getTaskWeekSettings(wn),
       api.getAllTaskWeekSettings(),
+      api.getAssignments(),
     ])
     setWeekAssignments(a)
     setDistribution(d)
     setWeekFixedHours(f)
     setWeekSettings(s)
     setAllWeekSettings(all)
+    setAllAssignments(allA)
   }, [])
 
   useEffect(() => { loadWeekData(weekNumber) }, [weekNumber, loadWeekData])
 
-  // Auto-detect "All weeks" mode: tasks where all 4 weeks have equal hours.
-  // Skips tasks the user has manually toggled to "Week X only" this session.
+  // Auto-detect "All weeks" mode: tasks where all 4 weeks have the same non-empty
+  // set of assigned people. This survives page refresh since it reads from DB state.
   useEffect(() => {
-    if (!allWeekSettings.length) return
-    const taskIds = [...new Set(allWeekSettings.map(s => s.task_id))]
+    const taskIds = [...new Set(allAssignments.map(a => a.task_id))]
     const allWeeksIds = taskIds.filter(taskId => {
-      if (manualWeekOnly.current.has(taskId)) return false
-      const settings = allWeekSettings.filter(s => s.task_id === taskId)
-      return settings.length === 4 &&
-        settings.every(s => Math.abs(s.weekly_hours_target - settings[0].weekly_hours_target) < 0.001)
+      const byWeek = [1, 2, 3, 4].map(wn =>
+        allAssignments.filter(a => a.task_id === taskId && a.week_number === wn)
+          .map(a => a.person_id).sort().join(',')
+      )
+      return byWeek[0] !== '' && byWeek.every(s => s === byWeek[0])
     })
     setThisWeekOnly(new Set(allWeeksIds))
-  }, [allWeekSettings])
+  }, [allAssignments])
 
   const switchWeek = (wn) => {
     setWeekNumber(wn)
@@ -225,8 +225,8 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setDistribution([])
     setWeekFixedHours([])
     setWeekSettings([])
+    setAllAssignments([])
     setThisWeekOnly(new Set())
-    manualWeekOnly.current.clear()
     if (editing && editing !== 'new') {
       const override = allWeekSettings.find(s => s.task_id === editing && s.week_number === wn)
       const globalTask = tasks.find(t => t.id === editing)
@@ -497,18 +497,47 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     await loadWeekData(weekNumber)
   }
 
-  const toggleThisWeekOnly = (taskId) => {
-    setThisWeekOnly(prev => {
-      const next = new Set(prev)
-      if (next.has(taskId)) {
-        next.delete(taskId)
-        manualWeekOnly.current.add(taskId)    // user explicitly chose "Week X only"
-      } else {
-        next.add(taskId)
-        manualWeekOnly.current.delete(taskId) // user switched back to "All weeks"
-      }
-      return next
-    })
+  const toggleThisWeekOnly = async (taskId) => {
+    const isCurrentlyAllWeeks = thisWeekOnly.has(taskId)
+    const otherWeeks = [1, 2, 3, 4].filter(wn => wn !== weekNumber)
+
+    if (isCurrentlyAllWeeks) {
+      // Switching to "Week X only": remove this task's assignments from all other weeks
+      const currentAssignments = weekAssignments.filter(a => a.task_id === taskId)
+      await Promise.all(
+        currentAssignments.flatMap(a =>
+          otherWeeks.map(wn => api.unassignPerson(taskId, a.person_id, wn))
+        )
+      )
+      setThisWeekOnly(prev => { const next = new Set(prev); next.delete(taskId); return next })
+    } else {
+      // Switching to "All weeks": copy current week's assignments + settings to all other weeks
+      const currentAssignments = weekAssignments.filter(a => a.task_id === taskId)
+      const taskFixed = weekFixedHours.filter(f => f.task_id === taskId)
+
+      // Assignments must exist before we can update their per-row settings
+      await Promise.all(
+        currentAssignments.flatMap(a =>
+          otherWeeks.map(wn => api.assignPerson({ task_id: taskId, person_id: a.person_id, week_number: wn }))
+        )
+      )
+      // Copy preferred_days, day_hours, and fixed_hours to other weeks
+      await Promise.all([
+        ...currentAssignments.flatMap(a =>
+          otherWeeks.flatMap(wn => [
+            ...(a.preferred_days ? [api.setPreferredDays(taskId, a.person_id, wn, a.preferred_days)] : []),
+            ...(a.day_hours && Object.keys(a.day_hours).length > 0
+              ? [api.setDayHours(taskId, a.person_id, wn, a.day_hours)]
+              : []),
+          ])
+        ),
+        ...taskFixed.flatMap(f =>
+          otherWeeks.map(wn => api.setFixedHours({ task_id: taskId, person_id: f.person_id, week_number: wn, hours: f.hours }))
+        ),
+      ])
+      setThisWeekOnly(prev => { const next = new Set(prev); next.add(taskId); return next })
+    }
+    await loadWeekData(weekNumber)
   }
 
   // ── All-tasks comparison ──
