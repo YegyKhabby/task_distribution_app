@@ -145,7 +145,7 @@ const DAY_OPTIONS = [
 function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   // ── Task editing state ──
   const [editing, setEditing] = useState(null)
-  const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
+  const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false, notes: '' })
   const [formError, setFormError] = useState('')
   const [pendingTaskDelete, setPendingTaskDelete] = useState(null)
   const [responsiblePersons, setResponsiblePersons] = useState([])
@@ -355,13 +355,13 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
 
   // ── Task CRUD ──
   const startAdd = () => {
-    setForm({ name: '', weekly_hours_target: '', color: COLORS[Math.floor(Math.random() * COLORS.length)], priority: tasks.length + 1, is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false })
+    setForm({ name: '', weekly_hours_target: '', color: COLORS[Math.floor(Math.random() * COLORS.length)], priority: tasks.length + 1, is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false, notes: '' })
     setEditing('new')
     setFormError('')
   }
 
   const startEdit = (t) => {
-    setForm({ name: t.name, weekly_hours_target: t.weekly_hours_target, color: t.color || COLORS[0], priority: t.priority || '', is_fill: t.is_fill || false, responsible_person: t.responsible_person || '', schedule_rule: t.schedule_rule || '', split_equally: t.split_equally || false })
+    setForm({ name: t.name, weekly_hours_target: t.weekly_hours_target, color: t.color || COLORS[0], priority: t.priority || '', is_fill: t.is_fill || false, responsible_person: t.responsible_person || '', schedule_rule: t.schedule_rule || '', split_equally: t.split_equally || false, notes: t.notes || '' })
     setEditing(t.id)
     setFormError('')
   }
@@ -872,6 +872,16 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                     onAutoSave={autoSave}
                     weekNumber={weekNumber}
                     responsiblePersons={responsiblePersons.map(rp => rp.name)}
+                  />
+                </div>
+                <div className="px-5 pt-3 pb-3 border-b border-gray-100">
+                  <textarea
+                    value={form.notes}
+                    onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                    onBlur={(e) => autoSave({ notes: e.target.value })}
+                    placeholder="Add notes for this task…"
+                    rows={2}
+                    className="w-full text-sm text-gray-700 placeholder-gray-400 bg-white border border-indigo-300 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-500"
                   />
                 </div>
                 <div className="px-5 py-4">
