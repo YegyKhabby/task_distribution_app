@@ -1617,9 +1617,16 @@ function PersonSummaryCards({ preview }) {
                 }
               </div>
 
-              <div className="flex items-center border-t border-gray-200 pt-2">
-                <span className="text-gray-400 flex-1">Fill</span>
-                <span className="font-medium text-gray-600">{fillTotal}h</span>
+              <div className="border-t border-gray-200 pt-2">
+                {p.fill.length === 0
+                  ? <div className="flex items-center"><span className="text-gray-400 flex-1">Fill</span><span className="font-medium text-gray-600">0h</span></div>
+                  : p.fill.map((t, i) => (
+                    <div key={i} className="flex items-center gap-2 py-0.5">
+                      <span className="text-gray-400 flex-1">Fill: {t.task_name}</span>
+                      <span className="font-medium text-gray-600">{t.hours}h</span>
+                    </div>
+                  ))
+                }
               </div>
 
               <div className="flex items-center border-t border-gray-300 pt-2">
