@@ -1605,7 +1605,10 @@ function PersonSummaryCards({ preview }) {
                             <span className="font-medium text-red-600 w-16 text-right">0h given</span>
                           </>
                         ) : (
-                          <span className="font-medium text-gray-800 w-16 text-right">{t.hours}h given</span>
+                          <>
+                            <span className="text-gray-400 text-xs text-right">shared</span>
+                            <span className="font-medium text-gray-800 w-16 text-right">{t.hours}h given</span>
+                          </>
                         )}
                       </div>
                     ))}
