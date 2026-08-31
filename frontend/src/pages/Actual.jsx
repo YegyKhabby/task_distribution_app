@@ -598,9 +598,13 @@ export default function Actual() {
   const hasData = entries.length > 0
 
   function getWeekStartOffset() {
-    const d = new Date(selectedWeek + 'T00:00:00')
-    const year = d.getFullYear()
-    const month = d.getMonth() + 1
+    const mon = new Date(selectedWeek + 'T00:00:00')
+    // Use the Friday of the week to determine the month context — a week starting at
+    // the very end of a month (e.g. Aug 31) is logically part of the next month.
+    const fri = new Date(mon)
+    fri.setDate(fri.getDate() + 4)
+    const year = fri.getFullYear()
+    const month = fri.getMonth() + 1
     return parseInt(localStorage.getItem(`week_start_${year}_${month}`) || '1', 10)
   }
 
