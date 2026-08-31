@@ -468,11 +468,21 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setSaving((s) => ({ ...s, [key]: false }))
   }
 
+  const fixedDebounceRef = useRef({})
+
   const updateFixed = async (taskId, personId, hours) => {
     await Promise.all(weeksFor(taskId).map((wn) =>
       api.setFixedHours({ task_id: taskId, person_id: personId, week_number: wn, hours: Number(hours) })
     ))
     await loadWeekData(weekNumber)
+  }
+
+  const debouncedUpdateFixed = (taskId, personId, hours) => {
+    const key = `${taskId}:${personId}`
+    clearTimeout(fixedDebounceRef.current[key])
+    fixedDebounceRef.current[key] = setTimeout(() => {
+      updateFixed(taskId, personId, hours)
+    }, 400)
   }
 
   const updatePreferredDays = async (taskId, personId, days) => {
@@ -958,6 +968,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                                   step={0.5}
                                   placeholder="auto"
                                   defaultValue={fixed || ''}
+                                  onChange={(e) => debouncedUpdateFixed(t.id, p.id, e.target.value || 0)}
                                   onBlur={(e) => updateFixed(t.id, p.id, e.target.value || 0)}
                                   className="w-20 border border-gray-300 rounded-md px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400 placeholder-gray-300"
                                 />
