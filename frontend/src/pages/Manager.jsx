@@ -1812,6 +1812,8 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
 
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
 
+      {preview && <PersonSummaryCards preview={preview} />}
+
       {/* ── Warnings — always visible, from both Preview and Distribute & Save All ── */}
 
       {/* Under-distributed tasks (0h or partial) — shown for all weeks */}
@@ -1852,8 +1854,6 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
 
       {preview && (
         <>
-          <PersonSummaryCards preview={preview} />
-
           {preview.warnings?.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
               <p className="text-sm font-semibold text-amber-800 mb-1">Hour shortfall warnings</p>
