@@ -74,6 +74,11 @@ function exportTasksExcel(tasks, people, distribution, weekNumber) {
 
 const TABS = ['Tasks', 'Distribute']
 const COLORS = ['#6366f1', '#f97316', '#10b981', '#0ea5e9', '#ec4899', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6', '#a78bfa']
+const PERSON_ROW_COLORS = [
+  'bg-indigo-50', 'bg-orange-50', 'bg-emerald-50', 'bg-sky-50',
+  'bg-pink-50', 'bg-amber-50', 'bg-red-50', 'bg-violet-50',
+  'bg-teal-50', 'bg-purple-50', 'bg-lime-50', 'bg-cyan-50',
+]
 
 const SCHEDULE_RULES = [
   { value: '', label: 'No rule (default)', hint: 'System decides based on available capacity' },
@@ -932,16 +937,17 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                     </div>
                   </div>
                   <div className="space-y-3">
-                    {people.map((p) => {
+                    {people.map((p, pIdx) => {
                       const isAssigned = assigned.has(p.id)
                       const key = `${t.id}:${p.id}`
                       const fixed = fixedMap[key]
                       const preferredDays = preferredDayMap[key] ?? []
                       const currentDayHours = dayHoursMap[key] || {}
                       const isSaving = saving[key]
+                      const rowColor = PERSON_ROW_COLORS[pIdx % PERSON_ROW_COLORS.length]
 
                       return (
-                        <div key={p.id} className="flex items-center gap-4 flex-wrap">
+                        <div key={p.id} className={`flex items-center gap-4 flex-wrap rounded-lg px-2 py-0.5 ${rowColor}`}>
                           <label className="flex items-center gap-3 cursor-pointer flex-1 min-w-32">
                             <input
                               type="checkbox"
