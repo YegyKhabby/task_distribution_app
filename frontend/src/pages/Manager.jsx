@@ -401,7 +401,6 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
         const { weekly_hours_target: _omit, ...taskFields } = globalData
         await api.updateTask(editing, taskFields)
 
-        // Hours target is always per-week only — the toggle only affects people assignments.
         const existingOverride = allWeekSettings.find(
           (s) => s.task_id === editing && s.week_number === weekNumber
         )
@@ -412,17 +411,24 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
         const hoursChanged = Math.abs(targetValue - storedTarget) > 0.001
 
         if (hoursChanged) {
-          // Update current week + initialize any weeks that have no explicit
-          // row yet, locking them in at the global value so future single-week
-          // changes never bleed into them via the global fallback.
-          const globalTarget = globalTask?.weekly_hours_target ?? 0
-          const weeksToInit = [1, 2, 3, 4].filter(
-            (wn) => wn !== weekNumber && !allWeekSettings.some((s) => s.task_id === editing && s.week_number === wn)
-          )
-          await Promise.all([
-            api.updateTaskWeekSettings(editing, weekNumber, targetValue),
-            ...weeksToInit.map((wn) => api.updateTaskWeekSettings(editing, wn, globalTarget)),
-          ])
+          if (thisWeekOnly.has(editing)) {
+            // All-weeks mode: propagate hours change to all 4 weeks
+            await Promise.all([1, 2, 3, 4].map((wn) =>
+              api.updateTaskWeekSettings(editing, wn, targetValue)
+            ))
+          } else {
+            // Week-only mode: update current week + initialize any weeks
+            // that have no explicit row yet (locks them at the global value
+            // so future single-week edits never bleed via the global fallback).
+            const globalTarget = globalTask?.weekly_hours_target ?? 0
+            const weeksToInit = [1, 2, 3, 4].filter(
+              (wn) => wn !== weekNumber && !allWeekSettings.some((s) => s.task_id === editing && s.week_number === wn)
+            )
+            await Promise.all([
+              api.updateTaskWeekSettings(editing, weekNumber, targetValue),
+              ...weeksToInit.map((wn) => api.updateTaskWeekSettings(editing, wn, globalTarget)),
+            ])
+          }
         }
       }
       await onReload()
