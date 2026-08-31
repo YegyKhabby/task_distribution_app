@@ -263,6 +263,20 @@ def compute_preview(week_number: int, week_start_date: date = None):
                     p = person_map[pid]
                     distributions.append({"person_id": pid, "person_name": p["name"], "hours": hrs, "type": "auto"})
 
+        # People assigned to this task who received 0h
+        unmet_assignments = []
+        for pid in assigned:
+            if pid not in person_map:
+                continue
+            if (tid, pid) in fixed_map:
+                continue
+            elif task.get("split_equally"):
+                if equal_split_result.get((pid, tid), 0) == 0:
+                    unmet_assignments.append({"person_id": pid, "person_name": person_map[pid]["name"]})
+            else:
+                if auto_result.get((pid, tid), 0) == 0:
+                    unmet_assignments.append({"person_id": pid, "person_name": person_map[pid]["name"]})
+
         total_dist = round_half(sum(d["hours"] for d in distributions))
         target = task["weekly_hours_target"]
         gap = round_half(abs(total_dist - target))
@@ -292,6 +306,7 @@ def compute_preview(week_number: int, week_start_date: date = None):
             "schedule_rule": task.get("schedule_rule"),
             "split_equally": task.get("split_equally", False),
             "distributions": distributions,
+            "unmet_assignments": unmet_assignments,
             "total_distributed": total_dist,
             "warning": task_warning,
             "warning_reason": task_warning_reason,

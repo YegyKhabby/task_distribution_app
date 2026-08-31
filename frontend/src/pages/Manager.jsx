@@ -1497,6 +1497,146 @@ function CompareAllPanel({ data, loading, tasks, onClose, onRefresh }) {
   )
 }
 
+// ── Distribute Tab helpers ──────────────────────────────────────────────────
+
+function buildPersonBreakdown(preview) {
+  const byPerson = {}
+  preview.person_summary.forEach((p) => {
+    byPerson[p.person_id] = { ...p, fixed: [], equal: [], auto: [], fill: [] }
+  })
+  preview.tasks.forEach((task) => {
+    task.distributions.forEach((d) => {
+      if (!byPerson[d.person_id]) return
+      const entry = { task_name: task.task_name, hours: d.hours }
+      if (task.is_fill) byPerson[d.person_id].fill.push(entry)
+      else if (d.type === 'fixed') byPerson[d.person_id].fixed.push(entry)
+      else if (d.type === 'equal') byPerson[d.person_id].equal.push(entry)
+      else byPerson[d.person_id].auto.push(entry)
+    })
+    if (!task.is_fill) {
+      ;(task.unmet_assignments || []).forEach((u) => {
+        if (!byPerson[u.person_id]) return
+        byPerson[u.person_id].auto.push({ task_name: task.task_name, hours: 0, target: task.target_hours })
+      })
+    }
+  })
+  return byPerson
+}
+
+function PersonSummaryCards({ preview }) {
+  const breakdown = buildPersonBreakdown(preview)
+  return (
+    <div className="mb-6 space-y-3">
+      <h3 className="font-semibold text-gray-800">Person Summary</h3>
+      {preview.person_summary.map((ps) => {
+        const p = { ...ps, ...breakdown[ps.person_id] }
+        const unmetSum = p.auto.filter((t) => t.hours === 0).reduce((s, t) => s + (t.target || 0), 0)
+        const totalAssigned = p.allocated_hours + unmetSum
+        const isOver = totalAssigned > p.weekly_hours + 0.1
+        const fixedTotal = p.fixed.reduce((s, t) => s + t.hours, 0)
+        const equalTotal = p.equal.reduce((s, t) => s + t.hours, 0)
+        const autoGiven = p.auto.filter((t) => t.hours > 0).reduce((s, t) => s + t.hours, 0)
+        const fillTotal = p.fill.reduce((s, t) => s + t.hours, 0)
+
+        return (
+          <div key={p.person_id} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+            <div className="flex items-center gap-3 px-5 py-3 bg-gray-50 border-b border-gray-100 flex-wrap">
+              <span className="font-medium text-gray-900 flex-1">{p.name}</span>
+              <span className="text-sm text-gray-500">capacity: {p.weekly_hours}h</span>
+              <span className={`text-xs font-medium px-2 py-1 rounded-full ${isOver ? 'bg-red-100 text-red-700' : p.spare_hours > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+                {isOver ? `${totalAssigned}h assigned / ${p.weekly_hours}h over limit` : `${totalAssigned}h / ${p.weekly_hours}h`}
+              </span>
+            </div>
+            <div className="px-5 py-3 space-y-3 text-sm">
+
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Fixed</p>
+                {p.fixed.length === 0
+                  ? <p className="text-gray-300 italic">none</p>
+                  : <>
+                    {p.fixed.map((t, i) => (
+                      <div key={i} className="flex items-center gap-2 py-1">
+                        <span className="text-gray-700 flex-1">{t.task_name}</span>
+                        <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">fixed</span>
+                        <span className="text-gray-500 w-24 text-right">{t.hours}h assigned</span>
+                        <span className="font-medium text-gray-800 w-16 text-right">{t.hours}h given</span>
+                      </div>
+                    ))}
+                    <div className="flex items-center text-xs text-gray-400 border-t border-gray-100 pt-1 mt-1">
+                      <span className="flex-1">Fixed subtotal</span>
+                      <span className="font-medium text-gray-500">{fixedTotal}h</span>
+                    </div>
+                  </>
+                }
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Equal split</p>
+                {p.equal.length === 0
+                  ? <p className="text-gray-300 italic">none</p>
+                  : <>
+                    {p.equal.map((t, i) => (
+                      <div key={i} className="flex items-center gap-2 py-1">
+                        <span className="text-gray-700 flex-1">{t.task_name}</span>
+                        <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full">equal</span>
+                        <span className="font-medium text-gray-800 w-16 text-right">{t.hours}h given</span>
+                      </div>
+                    ))}
+                    <div className="flex items-center text-xs text-gray-400 border-t border-gray-100 pt-1 mt-1">
+                      <span className="flex-1">Equal split subtotal</span>
+                      <span className="font-medium text-gray-500">{equalTotal}h</span>
+                    </div>
+                  </>
+                }
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Auto</p>
+                {p.auto.length === 0
+                  ? <p className="text-gray-300 italic">none</p>
+                  : <>
+                    {p.auto.map((t, i) => (
+                      <div key={i} className="flex items-center gap-2 py-1">
+                        <span className="text-gray-700 flex-1">{t.task_name}</span>
+                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">auto</span>
+                        {t.hours === 0 ? (
+                          <>
+                            <span className="text-gray-500 w-24 text-right">{t.target}h assigned</span>
+                            <span className="font-medium text-red-600 w-16 text-right">0h given</span>
+                          </>
+                        ) : (
+                          <span className="font-medium text-gray-800 w-16 text-right">{t.hours}h given</span>
+                        )}
+                      </div>
+                    ))}
+                    <div className="flex items-center text-xs text-gray-400 border-t border-gray-100 pt-1 mt-1">
+                      <span className="flex-1">Auto subtotal</span>
+                      <span className="font-medium text-gray-500">{autoGiven}h given</span>
+                    </div>
+                  </>
+                }
+              </div>
+
+              <div className="flex items-center border-t border-gray-200 pt-2">
+                <span className="text-gray-400 flex-1">Fill</span>
+                <span className="font-medium text-gray-600">{fillTotal}h</span>
+              </div>
+
+              <div className="flex items-center border-t border-gray-300 pt-2">
+                <span className="font-semibold text-gray-700 flex-1">Total assigned / capacity</span>
+                <span className={`font-semibold ${isOver ? 'text-red-600' : 'text-gray-800'}`}>
+                  {totalAssigned}h / {p.weekly_hours}h
+                </span>
+              </div>
+
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── Distribute Tab ─────────────────────────────────────────────────────────
 
 function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
@@ -1577,6 +1717,7 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
       const result = await api.confirmDistribution(1, effectiveFrom, null, false)
       setConfirmed(result)
       const allWeeks = await Promise.all([1, 2, 3, 4].map((wn) => api.previewDistribution(wn, effectiveFrom)))
+      setPreview(allWeeks[weekNumber - 1])
 
       // Under-distributed / 0h tasks (covers both partial AND fully missing)
       setWeeklyIssues(
@@ -1711,6 +1852,8 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
 
       {preview && (
         <>
+          <PersonSummaryCards preview={preview} />
+
           {preview.warnings?.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
               <p className="text-sm font-semibold text-amber-800 mb-1">Hour shortfall warnings</p>
@@ -1775,36 +1918,6 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
                 )}
               </div>
             ))}
-          </div>
-
-          <div className="bg-white border border-gray-200 rounded-xl shadow-sm mb-6">
-            <div className="px-5 py-3 border-b border-gray-100">
-              <h3 className="font-semibold text-gray-800">Person Summary</h3>
-            </div>
-            <div className="divide-y divide-gray-50">
-              {preview.person_summary.map((p) => (
-                <div key={p.person_id} className="flex items-center gap-4 px-5 py-2.5">
-                  <span className="text-sm font-medium text-gray-800 flex-1">{p.name}</span>
-                  <div className="flex items-center gap-1 w-48">
-                    <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${p.over_allocated ? 'bg-red-400' : 'bg-indigo-400'}`}
-                        style={{ width: `${Math.min(100, p.weekly_hours > 0 ? (p.allocated_hours / p.weekly_hours) * 100 : 0)}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className={`text-sm font-medium w-24 text-right ${p.over_allocated ? 'text-red-600' : 'text-gray-700'}`}>
-                    {p.allocated_hours} / {p.weekly_hours} hrs
-                  </span>
-                  {p.spare_hours > 0 && (
-                    <span className="text-xs text-emerald-600 w-20 text-right">{p.spare_hours} spare</span>
-                  )}
-                  {p.over_allocated && (
-                    <span className="text-xs text-red-500 w-20 text-right">over limit</span>
-                  )}
-                </div>
-              ))}
-            </div>
           </div>
 
           <div className="flex items-center gap-3 flex-wrap">
