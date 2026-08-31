@@ -531,7 +531,7 @@ export default function Calendar() {
           onClick={async () => {
             setExporting(true)
             try {
-              const data = await api.getCalendarExportData(year, month, weekStart)
+              const data = await api.getCalendarExportData(year, month, weekStart, includeOverflow)
               exportCalendarExcel(data)
             } finally {
               setExporting(false)

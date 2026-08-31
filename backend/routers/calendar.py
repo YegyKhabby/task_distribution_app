@@ -645,7 +645,7 @@ def export_day_excel(date_str: str = Query(..., alias="date"), week_start: int =
 
 
 @router.get("/export-data")
-def get_calendar_export_data(year: int = Query(...), month: int = Query(...), week_start: int = Query(default=1, ge=1, le=4)):
+def get_calendar_export_data(year: int = Query(...), month: int = Query(...), week_start: int = Query(default=1, ge=1, le=4), include_overflow: bool = Query(default=False)):
     """
     Return pre-computed daily allocations for all active people as JSON.
     Used by the browser to generate the Excel file client-side.
@@ -750,11 +750,12 @@ def get_calendar_export_data(year: int = Query(...), month: int = Query(...), we
 
         if section_a:
             mon_a_str = str(last_monday_prev)
-            tasks_a, preferred_a = _tasks_for(pid, 4, mon_a_str)
+            wn_a = week_start  # overflow week uses same week_number as calendar (i=0 → week_start)
+            tasks_a, preferred_a = _tasks_for(pid, wn_a, mon_a_str)
             holiday_dows_a = holiday_dows_for_week(last_monday_prev, holiday_dates)
             schedule_a = {dow: hrs for dow, hrs in _sched_for(pid, mon_a_str).items() if dow not in holiday_dows_a}
             tmap_a = {t["task_id"]: t for t in tasks_a}
-            dh_a = day_hours_by_pid[pid].get(4) or None
+            dh_a = day_hours_by_pid[pid].get(wn_a) or None
             alloc_a, _warnings = distribute_week(tasks_a, schedule_a, pname, preferred_a, day_hours_map=dh_a, blocked_days=holiday_dows_a)
             for d in section_a:
                 d_str = str(d)
