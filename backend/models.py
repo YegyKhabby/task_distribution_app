@@ -30,6 +30,7 @@ class TaskCreate(BaseModel):
     schedule_rule: Optional[str] = None  # distribution rule: one_day, two_days, flexible_days, first_work_day, do_not_split, proportional, equal_per_day
     split_equally: bool = False           # if True: divide target hours equally among assigned people
     notes: Optional[str] = None
+    is_all_weeks: bool = False
 
 
 class TaskUpdate(BaseModel):
@@ -42,6 +43,7 @@ class TaskUpdate(BaseModel):
     schedule_rule: Optional[str] = None
     split_equally: Optional[bool] = None
     notes: Optional[str] = None
+    is_all_weeks: Optional[bool] = None
 
 
 class TaskPersonAssign(BaseModel):
