@@ -532,11 +532,22 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
       )
       setThisWeekOnly(prev => { const next = new Set(prev); next.delete(taskId); return next })
     } else {
-      // Switching to "All weeks": copy current week's assignments + settings to all other weeks
+      // Switching to "All weeks": make other weeks exactly match the current week's assignments
       const currentAssignments = weekAssignments.filter(a => a.task_id === taskId)
       const taskFixed = weekFixedHours.filter(f => f.task_id === taskId)
+      const currentPids = new Set(currentAssignments.map(a => a.person_id))
 
-      // Assignments must exist before we can update their per-row settings
+      // Remove any people in other weeks who aren't in the current week
+      const otherWeekAssignments = allAssignments.filter(
+        a => a.task_id === taskId && otherWeeks.includes(a.week_number)
+      )
+      await Promise.all(
+        otherWeekAssignments
+          .filter(a => !currentPids.has(a.person_id))
+          .map(a => api.unassignPerson(taskId, a.person_id, a.week_number))
+      )
+
+      // Add current week's people to other weeks (upsert is safe for existing)
       await Promise.all(
         currentAssignments.flatMap(a =>
           otherWeeks.map(wn => api.assignPerson({ task_id: taskId, person_id: a.person_id, week_number: wn }))
