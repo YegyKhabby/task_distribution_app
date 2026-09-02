@@ -388,6 +388,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
       schedule_rule: f.is_fill ? null : (f.schedule_rule || null),
       split_equally: f.is_fill ? false : f.split_equally,
       weekly_hours_target: targetValue,
+      notes: f.notes || null,
     }
     try {
       if (editing === 'new') {
@@ -553,7 +554,10 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
           otherWeeks.map(wn => api.assignPerson({ task_id: taskId, person_id: a.person_id, week_number: wn }))
         )
       )
-      // Copy preferred_days, day_hours, and fixed_hours to other weeks
+      // Copy preferred_days, day_hours, fixed_hours, and weekly hours target to other weeks
+      const currentHoursTarget = allWeekSettings.find(
+        s => s.task_id === taskId && s.week_number === weekNumber
+      )?.weekly_hours_target ?? tasks.find(t => t.id === taskId)?.weekly_hours_target ?? 0
       await Promise.all([
         ...currentAssignments.flatMap(a =>
           otherWeeks.flatMap(wn => [
@@ -566,6 +570,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
         ...taskFixed.flatMap(f =>
           otherWeeks.map(wn => api.setFixedHours({ task_id: taskId, person_id: f.person_id, week_number: wn, hours: f.hours }))
         ),
+        ...otherWeeks.map(wn => api.updateTaskWeekSettings(taskId, wn, currentHoursTarget)),
       ])
       setThisWeekOnly(prev => { const next = new Set(prev); next.add(taskId); return next })
     }
