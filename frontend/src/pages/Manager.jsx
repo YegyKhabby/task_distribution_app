@@ -169,7 +169,9 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   const [distribution, setDistribution] = useState([])
   const [weekFixedHours, setWeekFixedHours] = useState([])
   const [weekSettings, setWeekSettings] = useState([])
-  const [thisWeekOnly, setThisWeekOnly] = useState(new Set())
+  const [thisWeekOnly, setThisWeekOnly] = useState(() =>
+    new Set(JSON.parse(localStorage.getItem('manager_all_weeks_tasks') || '[]'))
+  )
   const [allAssignments, setAllAssignments] = useState([])
 
   // ── Hours summary state ──
@@ -210,19 +212,10 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
 
   useEffect(() => { loadWeekData(weekNumber) }, [weekNumber, loadWeekData])
 
-  // Auto-detect "All weeks" mode: tasks where all 4 weeks have the same non-empty
-  // set of assigned people. This survives page refresh since it reads from DB state.
+  // Persist "All weeks" toggle state to localStorage whenever it changes.
   useEffect(() => {
-    const taskIds = [...new Set(allAssignments.map(a => a.task_id))]
-    const allWeeksIds = taskIds.filter(taskId => {
-      const byWeek = [1, 2, 3, 4].map(wn =>
-        allAssignments.filter(a => a.task_id === taskId && a.week_number === wn)
-          .map(a => a.person_id).sort().join(',')
-      )
-      return byWeek[0] !== '' && byWeek.every(s => s === byWeek[0])
-    })
-    setThisWeekOnly(new Set(allWeeksIds))
-  }, [allAssignments])
+    localStorage.setItem('manager_all_weeks_tasks', JSON.stringify([...thisWeekOnly]))
+  }, [thisWeekOnly])
 
   const switchWeek = (wn) => {
     setWeekNumber(wn)
@@ -231,7 +224,6 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     setWeekFixedHours([])
     setWeekSettings([])
     setAllAssignments([])
-    setThisWeekOnly(new Set())
     if (editing && editing !== 'new') {
       const override = allWeekSettings.find(s => s.task_id === editing && s.week_number === wn)
       const globalTask = tasks.find(t => t.id === editing)
