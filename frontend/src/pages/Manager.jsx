@@ -460,16 +460,21 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   }
 
   // ── Assignment actions ──
-  const weeksFor = (taskId) => thisWeekOnly.has(taskId) ? [1, 2, 3, 4] : [weekNumber]
+  // Individual changes always target only the current week and exit "All weeks" mode.
+  // "All weeks" is a one-time copy action (via the toggle), not a persistent propagation mode.
+  const exitAllWeeks = (taskId) => {
+    if (thisWeekOnly.has(taskId)) {
+      setThisWeekOnly(prev => { const next = new Set(prev); next.delete(taskId); return next })
+    }
+  }
 
   const toggleAssign = async (taskId, personId, currently_assigned) => {
     const key = `${taskId}:${personId}`
     setSaving((s) => ({ ...s, [key]: true }))
-    await Promise.all(weeksFor(taskId).map(wn =>
-      currently_assigned
-        ? api.unassignPerson(taskId, personId, wn)
-        : api.assignPerson({ task_id: taskId, person_id: personId, week_number: wn })
-    ))
+    exitAllWeeks(taskId)
+    currently_assigned
+      ? await api.unassignPerson(taskId, personId, weekNumber)
+      : await api.assignPerson({ task_id: taskId, person_id: personId, week_number: weekNumber })
     await loadWeekData(weekNumber)
     setSaving((s) => ({ ...s, [key]: false }))
   }
@@ -477,9 +482,8 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   const fixedDebounceRef = useRef({})
 
   const updateFixed = async (taskId, personId, hours) => {
-    await Promise.all(weeksFor(taskId).map((wn) =>
-      api.setFixedHours({ task_id: taskId, person_id: personId, week_number: wn, hours: Number(hours) })
-    ))
+    exitAllWeeks(taskId)
+    await api.setFixedHours({ task_id: taskId, person_id: personId, week_number: weekNumber, hours: Number(hours) })
     await loadWeekData(weekNumber)
   }
 
@@ -492,18 +496,16 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
   }
 
   const updatePreferredDays = async (taskId, personId, days) => {
-    await Promise.all(weeksFor(taskId).map(wn =>
-      api.setPreferredDays(taskId, personId, wn, days.length ? days : null)
-    ))
+    exitAllWeeks(taskId)
+    await api.setPreferredDays(taskId, personId, weekNumber, days.length ? days : null)
     await loadWeekData(weekNumber)
   }
 
   const updateDayHours = async (taskId, personId, dayHoursObj) => {
     // dayHoursObj: {1: 2.0, 3: 1.0} — only days with values, or {} to clear all
+    exitAllWeeks(taskId)
     const payload = Object.keys(dayHoursObj).length ? dayHoursObj : null
-    await Promise.all(weeksFor(taskId).map(wn =>
-      api.setDayHours(taskId, personId, wn, payload)
-    ))
+    await api.setDayHours(taskId, personId, weekNumber, payload)
     await loadWeekData(weekNumber)
   }
 
@@ -524,14 +526,10 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     const otherWeeks = [1, 2, 3, 4].filter(wn => wn !== weekNumber)
 
     if (isCurrentlyAllWeeks) {
-      // Switching to "Week X only": remove this task's assignments from all other weeks
-      const currentAssignments = weekAssignments.filter(a => a.task_id === taskId)
-      await Promise.all(
-        currentAssignments.flatMap(a =>
-          otherWeeks.map(wn => api.unassignPerson(taskId, a.person_id, wn))
-        )
-      )
+      // Switching to "Week X only": just change the UI state.
+      // Other weeks keep their data — this is a non-destructive operation.
       setThisWeekOnly(prev => { const next = new Set(prev); next.delete(taskId); return next })
+      return
     } else {
       // Switching to "All weeks": make other weeks exactly match the current week's assignments
       const currentAssignments = weekAssignments.filter(a => a.task_id === taskId)
