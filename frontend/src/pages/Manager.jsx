@@ -558,9 +558,16 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
       await api.updateTask(taskId, { is_all_weeks: false })
       return
     } else {
-      // Switching to "All weeks": make other weeks exactly match the current week's assignments
-      const currentAssignments = weekAssignments.filter(a => a.task_id === taskId)
-      const taskFixed = weekFixedHours.filter(f => f.task_id === taskId)
+      // Switching to "All weeks": fetch fresh data to avoid stale React state,
+      // then make other weeks exactly match the current week's assignments
+      // Small delay to let any in-flight onBlur saves complete before fetching
+      await new Promise(res => setTimeout(res, 300))
+      const [freshAssignments, freshFixed] = await Promise.all([
+        api.getAssignments(weekNumber, taskId),
+        api.getFixedHours(taskId, weekNumber),
+      ])
+      const currentAssignments = freshAssignments
+      const taskFixed = freshFixed
       const currentPids = new Set(currentAssignments.map(a => a.person_id))
 
       // Remove any people in other weeks who aren't in the current week
