@@ -16,11 +16,11 @@ export default function Absences() {
   })
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [collapsedMonths, setCollapsedMonths] = useState({})
 
   const load = async () => {
     setLoading(true)
-    const today = format(new Date(), 'yyyy-MM-dd')
-    const [a, p] = await Promise.all([api.getAbsences(null, today), api.getPeople()])
+    const [a, p] = await Promise.all([api.getAbsences(null, null), api.getPeople()])
     setAbsences(a)
     setPeople(p.filter((x) => x.active))
     setLoading(false)
@@ -74,8 +74,13 @@ export default function Absences() {
     load()
   }
 
+  const today = format(new Date(), 'yyyy-MM-dd')
+  const upcoming = absences.filter((a) => a.date >= today)
+  const past = absences.filter((a) => a.date < today)
+
   // Group absences by person + contiguous date ranges for display
-  const grouped = groupAbsences(absences)
+  const grouped = groupAbsences(upcoming)
+  const historyByMonth = groupByMonth(past)
 
   return (
     <div>
@@ -173,42 +178,78 @@ export default function Absences() {
 
       {loading ? (
         <p className="text-gray-500">Loading…</p>
-      ) : grouped.length === 0 ? (
-        <p className="text-gray-400 text-center py-12">No upcoming absences.</p>
       ) : (
-        <div className="space-y-2">
-          {grouped.map((g) => (
-            <div
-              key={g.key}
-              className="bg-white border border-gray-200 rounded-xl px-5 py-3 flex items-center gap-4 shadow-sm"
-            >
-              <span
-                className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                  g.type === 'sick'
-                    ? 'bg-orange-100 text-orange-700'
-                    : 'bg-sky-100 text-sky-700'
-                }`}
-              >
-                {g.type === 'sick' ? 'Sick' : 'Vacation'}
-              </span>
-              <div className="flex-1">
-                <span className="font-medium text-gray-900">{g.person_name}</span>
-                <span className="ml-3 text-sm text-gray-500">{g.dateRange}</span>
-                <span className="ml-2 text-xs text-gray-400">({g.days} day{g.days !== 1 ? 's' : ''})</span>
-              </div>
-              {g.reported_by && (
-                <span className="text-xs text-gray-400">by {g.reported_by}</span>
-              )}
-              <button
-                onClick={() => removeGroup(g.ids, remove)}
-                className="text-xs text-red-400 hover:text-red-600"
-              >
-                Remove
-              </button>
+        <>
+          {grouped.length === 0 ? (
+            <p className="text-gray-400 text-center py-8">No upcoming absences.</p>
+          ) : (
+            <div className="space-y-2 mb-8">
+              {grouped.map((g) => <AbsenceRow key={g.key} g={g} onRemove={() => removeGroup(g.ids, remove)} />)}
             </div>
-          ))}
-        </div>
+          )}
+
+          {historyByMonth.length > 0 && (
+            <div>
+              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">History</h2>
+              <div className="space-y-3">
+                {historyByMonth.map(({ monthKey, label, sick, vacation, rows }) => {
+                  const collapsed = collapsedMonths[monthKey] ?? false
+                  const toggle = () => setCollapsedMonths((p) => ({ ...p, [monthKey]: !collapsed }))
+                  return (
+                    <div key={monthKey} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+                      <button
+                        onClick={toggle}
+                        className="w-full flex items-center gap-3 px-5 py-3 text-left hover:bg-gray-50"
+                      >
+                        <span className="font-semibold text-gray-800 flex-1">{label}</span>
+                        {sick > 0 && (
+                          <span className="text-xs font-medium bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">
+                            {sick} sick day{sick !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {vacation > 0 && (
+                          <span className="text-xs font-medium bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full">
+                            {vacation} vacation day{vacation !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                        <span className="text-gray-400 text-xs">{collapsed ? '▶' : '▼'}</span>
+                      </button>
+                      {!collapsed && (
+                        <div className="border-t border-gray-100 divide-y divide-gray-100">
+                          {rows.map((g) => (
+                            <AbsenceRow key={g.key} g={g} onRemove={() => removeGroup(g.ids, remove)} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </>
       )}
+    </div>
+  )
+}
+
+function AbsenceRow({ g, onRemove }) {
+  return (
+    <div className="px-5 py-3 flex items-center gap-4">
+      <span
+        className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+          g.type === 'sick' ? 'bg-orange-100 text-orange-700' : 'bg-sky-100 text-sky-700'
+        }`}
+      >
+        {g.type === 'sick' ? 'Sick' : 'Vacation'}
+      </span>
+      <div className="flex-1">
+        <span className="font-medium text-gray-900">{g.person_name}</span>
+        <span className="ml-3 text-sm text-gray-500">{g.dateRange}</span>
+        <span className="ml-2 text-xs text-gray-400">({g.days} day{g.days !== 1 ? 's' : ''})</span>
+      </div>
+      {g.reported_by && <span className="text-xs text-gray-400">by {g.reported_by}</span>}
+      <button onClick={onRemove} className="text-xs text-red-400 hover:text-red-600">Remove</button>
     </div>
   )
 }
@@ -268,4 +309,27 @@ function finalize(g) {
 
 function formatDate(d) {
   return format(new Date(d + 'T12:00:00'), 'MMM d, yyyy')
+}
+
+function groupByMonth(absences) {
+  // Returns [{monthKey, label, sick, vacation, rows}] newest first
+  const byMonth = {}
+  for (const a of absences) {
+    const key = a.date.slice(0, 7) // "2026-10"
+    if (!byMonth[key]) byMonth[key] = []
+    byMonth[key].push(a)
+  }
+  return Object.keys(byMonth)
+    .sort((a, b) => b.localeCompare(a))
+    .map((key) => {
+      const rows = groupAbsences(byMonth[key])
+      const all = byMonth[key]
+      return {
+        monthKey: key,
+        label: format(new Date(key + '-15'), 'MMMM yyyy'),
+        sick: all.filter((a) => a.type === 'sick').length,
+        vacation: all.filter((a) => a.type === 'vacation').length,
+        rows,
+      }
+    })
 }
