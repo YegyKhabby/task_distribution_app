@@ -277,9 +277,12 @@ export default function Setup() {
     const base = futureVersion
       ? scheduleFromRows(futureVersion.rows)
       : emptySchedule()
+    const existingValidUntil = futureVersion?.rows?.find(r => r.valid_until != null)?.valid_until ?? null
     setFutureForm({
       validFrom: futureVersion?.validFrom ?? nextMonday(),
       schedule: base,
+      type: existingValidUntil ? 'temporary' : 'basic',
+      validUntil: existingValidUntil,
     })
     setSavedFuture(false)
     setErrorFuture('')
@@ -295,15 +298,26 @@ export default function Setup() {
       setErrorFuture('Starting date must be a Monday')
       return
     }
+    if (futureForm.type === 'temporary') {
+      if (!futureForm.validUntil) {
+        setErrorFuture('Set an end date for the temporary schedule')
+        return
+      }
+      if (futureForm.validUntil <= futureForm.validFrom) {
+        setErrorFuture('End date must be after start date')
+        return
+      }
+    }
     setSavingFuture(true)
     setErrorFuture('')
     try {
+      const validUntil = futureForm.type === 'temporary' ? futureForm.validUntil : null
       const entries = futureForm.schedule
-        .map(d => ({ day_of_week: d.day, hours: d.checked ? Number(d.hours) : 0, location: d.location, valid_from: futureForm.validFrom }))
+        .map(d => ({ day_of_week: d.day, hours: d.checked ? Number(d.hours) : 0, location: d.location, valid_from: futureForm.validFrom, valid_until: validUntil }))
       if (entries.every(e => e.hours === 0)) { setErrorFuture('Set at least one working day'); setSavingFuture(false); return }
       await api.saveSchedule(selectedId, entries)
       setSavedFuture(true)
-      setFutureVersion({ validFrom: futureForm.validFrom, rows: entries.map(e => ({ ...e, day_of_week: e.day_of_week })) })
+      setFutureVersion({ validFrom: futureForm.validFrom, rows: entries.map(e => ({ ...e, valid_until: validUntil })) })
       setFutureForm(null)
     } catch (e) {
       setErrorFuture(e.message)
@@ -327,6 +341,8 @@ export default function Setup() {
   const totalHours = schedule.filter(d => d.checked).reduce((s, d) => s + Number(d.hours || 0), 0)
   const futureHours = futureVersion ? scheduleFromRows(futureVersion.rows).filter(d => d.checked).reduce((s, d) => s + Number(d.hours || 0), 0) : 0
   const currentEndLabel = futureVersion ? currentScheduleEndsOn(futureVersion.validFrom) : null
+  const futureIsTemporary = futureVersion?.rows?.some(r => r.valid_until != null) ?? false
+  const futureValidUntilDate = futureIsTemporary ? (futureVersion.rows.find(r => r.valid_until != null)?.valid_until ?? null) : null
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -397,12 +413,23 @@ export default function Setup() {
                   {futureVersion ? formatLabelDate(futureVersion.validFrom) : 'No future schedule'}
                 </h2>
                 <p className="mt-1 text-sm text-gray-600">
-                  {futureVersion ? 'This schedule takes over automatically on that Monday.' : 'Add one future schedule version if your weekly pattern is changing.'}
+                  {futureVersion
+                    ? futureIsTemporary
+                      ? `Temporary · reverts to basic on ${futureValidUntilDate ? formatLabelDate(futureValidUntilDate) : '—'}`
+                      : 'Permanent change — replaces the current basic schedule.'
+                    : 'Add one future schedule version if your weekly pattern is changing.'}
                 </p>
               </div>
-              <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${futureVersion ? 'bg-white text-amber-700 ring-amber-200' : 'bg-white text-gray-500 ring-gray-200'}`}>
-                {futureVersion ? `${futureHours} hrs/week` : 'Not set'}
-              </span>
+              <div className="flex flex-col items-end gap-1">
+                {futureVersion && (
+                  <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${futureIsTemporary ? 'bg-orange-100 text-orange-700' : 'bg-indigo-100 text-indigo-700'}`}>
+                    {futureIsTemporary ? 'Temporary' : 'Basic'}
+                  </span>
+                )}
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${futureVersion ? 'bg-white text-amber-700 ring-amber-200' : 'bg-white text-gray-500 ring-gray-200'}`}>
+                  {futureVersion ? `${futureHours} hrs/week` : 'Not set'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -461,12 +488,23 @@ export default function Setup() {
 
           {/* Existing future version summary */}
           {futureVersion && !futureForm && (
-            <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-4 mb-4">
+            <div className={`border rounded-xl px-4 py-4 mb-4 ${futureIsTemporary ? 'bg-orange-50 border-orange-100' : 'bg-amber-50 border-amber-100'}`}>
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700 mb-1">Valid from</p>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${futureIsTemporary ? 'bg-orange-100 text-orange-700' : 'bg-amber-100 text-amber-700'}`}>
+                      {futureIsTemporary ? 'Temporary' : 'Basic change'}
+                    </span>
+                  </div>
+                  <p className={`text-xs font-semibold uppercase tracking-[0.16em] mb-1 ${futureIsTemporary ? 'text-orange-700' : 'text-amber-700'}`}>Starts</p>
                   <p className="text-sm font-semibold text-gray-900">{formatLabelDate(futureVersion.validFrom)}</p>
-                  <p className="mt-1 text-xs text-gray-600">Current schedule will apply through {currentScheduleEndsOn(futureVersion.validFrom)}.</p>
+                  {futureIsTemporary && futureValidUntilDate ? (
+                    <p className="mt-1 text-xs text-gray-600">
+                      Active through {formatLabelDate(futureValidUntilDate)}, then reverts to basic schedule.
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-xs text-gray-600">Current schedule will apply through {currentScheduleEndsOn(futureVersion.validFrom)}.</p>
+                  )}
                   <p className="text-xs text-gray-600 mt-2">
                     {DAYS
                       .map(d => {
@@ -488,9 +526,35 @@ export default function Setup() {
           {/* Future form */}
           {futureForm ? (
             <div className="space-y-4">
+              {/* Type selector */}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setFutureForm(f => ({ ...f, type: 'basic', validUntil: null }))}
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-sm font-medium border transition-colors text-left ${
+                    futureForm.type === 'basic'
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  <span className="block font-semibold">Basic change</span>
+                  <span className={`block text-xs mt-0.5 ${futureForm.type === 'basic' ? 'text-indigo-200' : 'text-gray-400'}`}>Permanent — replaces current schedule</span>
+                </button>
+                <button
+                  onClick={() => setFutureForm(f => ({ ...f, type: 'temporary' }))}
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-sm font-medium border transition-colors text-left ${
+                    futureForm.type === 'temporary'
+                      ? 'bg-orange-500 text-white border-orange-500'
+                      : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  <span className="block font-semibold">Temporary</span>
+                  <span className={`block text-xs mt-0.5 ${futureForm.type === 'temporary' ? 'text-orange-100' : 'text-gray-400'}`}>Reverts to basic when it expires</span>
+                </button>
+              </div>
+
               <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-4 py-3">
                 <div className="flex flex-col gap-1">
-                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">Valid from</span>
+                  <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-700">Starts on</span>
                   <span className="text-sm text-gray-600">Choose the Monday when this new weekly pattern should start.</span>
                 </div>
                 <div className="mt-3 flex flex-col gap-2">
@@ -512,6 +576,24 @@ export default function Setup() {
                   {futureDateHint && <p className="text-xs font-medium text-amber-700">{futureDateHint}</p>}
                 </div>
               </div>
+
+              {futureForm.type === 'temporary' && (
+                <div className="rounded-xl border border-orange-100 bg-orange-50/60 px-4 py-3">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-[0.16em] text-orange-700">Ends on</span>
+                    <span className="text-sm text-gray-600">Last day this temporary schedule applies. After this, the basic schedule resumes.</span>
+                  </div>
+                  <div className="mt-3">
+                    <input
+                      type="date"
+                      value={futureForm.validUntil || ''}
+                      min={futureForm.validFrom}
+                      onChange={e => setFutureForm(f => ({ ...f, validUntil: e.target.value }))}
+                      className="w-56 border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400"
+                    />
+                  </div>
+                </div>
+              )}
               <DayGrid
                 schedule={futureForm.schedule}
                 onToggle={day => setFutureForm(f => ({ ...f, schedule: f.schedule.map(d => d.day === day ? { ...d, checked: !d.checked, hours: d.checked ? 0 : d.hours || 4 } : d) }))}
@@ -523,9 +605,9 @@ export default function Setup() {
                 <button
                   onClick={saveFuture}
                   disabled={savingFuture}
-                  className="bg-amber-500 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-amber-600 disabled:opacity-40"
+                  className={`text-white px-5 py-2 rounded-lg text-sm font-medium disabled:opacity-40 ${futureForm.type === 'temporary' ? 'bg-orange-500 hover:bg-orange-600' : 'bg-amber-500 hover:bg-amber-600'}`}
                 >
-                  {savingFuture ? 'Saving…' : 'Save upcoming schedule'}
+                  {savingFuture ? 'Saving…' : futureForm.type === 'temporary' ? 'Save temporary schedule' : 'Save basic change'}
                 </button>
                 <button onClick={() => setFutureForm(null)} className="text-gray-500 text-sm hover:underline">Cancel</button>
                 {savedFuture && <span className="text-green-600 text-sm font-medium">Saved!</span>}

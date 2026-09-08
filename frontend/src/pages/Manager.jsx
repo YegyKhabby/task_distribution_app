@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import XLSX from 'xlsx-js-style'
 import { api } from '../api'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -97,13 +97,17 @@ export default function Manager() {
   const [people, setPeople] = useState([])
   const [planningDate, setPlanningDate] = useState(nextMondayDateString)
 
+  const [schedules, setSchedules] = useState([])
+
   const reload = useCallback(async () => {
-    const [t, p] = await Promise.all([
+    const [t, p, scheds] = await Promise.all([
       api.getTasks(),
       api.getPeople(planningDate),
+      api.getAllSchedules(),
     ])
     setTasks([...t].sort((a, b) => a.name.localeCompare(b.name)))
     setPeople(p.filter((x) => x.active).sort((a, b) => a.name.localeCompare(b.name)))
+    setSchedules(scheds || [])
   }, [planningDate])
 
   useEffect(() => { reload() }, [reload])
@@ -128,7 +132,7 @@ export default function Manager() {
       </div>
 
       {tab === 'Tasks' && (
-        <TasksTab tasks={tasks} people={people} onReload={reload} planningDate={planningDate} setPlanningDate={setPlanningDate} />
+        <TasksTab tasks={tasks} people={people} onReload={reload} planningDate={planningDate} setPlanningDate={setPlanningDate} schedules={schedules} />
       )}
       {tab === 'Distribute' && (
         <DistributeTab tasks={tasks} people={people} effectiveFrom={planningDate} setEffectiveFrom={setPlanningDate} />
@@ -147,7 +151,34 @@ const DAY_OPTIONS = [
   { value: 5, label: 'Fri' },
 ]
 
-function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
+function activeSchedForDate(rows, dateStr) {
+  const activeRows = rows.filter((r) => {
+    const vf = r.valid_from || '2000-01-01'
+    const vu = r.valid_until
+    return vf <= dateStr && (vu == null || vu >= dateStr)
+  })
+  if (activeRows.length === 0) return {}
+  const latestVersion = activeRows.reduce((latest, r) => {
+    const vf = r.valid_from || '2000-01-01'
+    return vf > latest ? vf : latest
+  }, '2000-01-01')
+  return Object.fromEntries(
+    activeRows
+      .filter((r) => (r.valid_from || '2000-01-01') === latestVersion && r.hours > 0)
+      .map((r) => [r.day_of_week, r])
+  )
+}
+
+function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, schedules }) {
+  const scheduleMap = useMemo(() => {
+    const map = {}
+    for (const p of people) {
+      const rows = (schedules || []).filter(r => r.person_id === p.id)
+      map[p.id] = activeSchedForDate(rows, planningDate)
+    }
+    return map
+  }, [schedules, people, planningDate])
+
   // ── Task editing state ──
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState({ name: '', weekly_hours_target: '', color: COLORS[0], priority: '', is_fill: false, responsible_person: '', schedule_rule: '', split_equally: false, notes: '' })
@@ -995,51 +1026,67 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
                                 {DAY_OPTIONS.map((o) => {
                                   const isSelected = preferredDays.includes(o.value) || currentDayHours[String(o.value)] != null || currentDayHours[o.value] != null
                                   const currentHours = currentDayHours[String(o.value)] ?? currentDayHours[o.value] ?? ''
+                                  const personSched = scheduleMap[p.id] || {}
+                                  const schedEntry = personSched[o.value]
+                                  const schedHours = schedEntry?.hours ?? 0
+                                  const isInSchedule = schedHours > 0
+                                  const isHalfDay = isInSchedule && schedHours < 8
+                                  const barPct = isInSchedule ? Math.min(schedHours / 8 * 100, 100) : 0
+                                  const cellBorder = isInSchedule ? (isHalfDay ? 'border-amber-400' : 'border-indigo-400') : 'border-gray-300'
+                                  const cellBg = isInSchedule ? (isHalfDay ? 'bg-amber-100' : 'bg-indigo-100') : 'bg-gray-100'
                                   return (
-                                    <div key={o.value} className={`flex items-center gap-1 rounded-md border px-1.5 py-1 ${isSelected ? 'border-indigo-200 bg-indigo-50' : 'border-gray-200 bg-white'}`}>
-                                      <label className="flex items-center gap-1 cursor-pointer">
+                                    <div key={o.value} className={`flex flex-col rounded-md border overflow-hidden ${cellBorder} ${cellBg}`}>
+                                      <div className="flex items-center gap-1 px-1.5 py-1">
+                                        <label className="flex items-center gap-1 cursor-pointer">
+                                          <input
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={(e) => {
+                                              const nextSelected = e.target.checked
+                                                ? [...new Set([...preferredDays, o.value])]
+                                                : preferredDays.filter((d) => d !== o.value)
+                                              const nextDayHours = { ...currentDayHours }
+                                              if (!e.target.checked) {
+                                                delete nextDayHours[o.value]
+                                                delete nextDayHours[String(o.value)]
+                                              }
+                                              updateDaySelection(t.id, p.id, nextSelected, nextDayHours)
+                                            }}
+                                            className="w-3.5 h-3.5 rounded text-indigo-600"
+                                          />
+                                          <span className={`text-[10px] font-medium ${isInSchedule ? (isHalfDay ? 'text-amber-800' : 'text-indigo-800') : 'text-gray-500'}`}>{o.label}</span>
+                                        </label>
                                         <input
-                                          type="checkbox"
-                                          checked={isSelected}
-                                          onChange={(e) => {
-                                            const nextSelected = e.target.checked
+                                          type="number"
+                                          min={0}
+                                          step={0.5}
+                                          placeholder="—"
+                                          defaultValue={currentHours !== '' ? currentHours : ''}
+                                          key={`${key}:${weekNumber}:${currentHours}`}
+                                          disabled={!isSelected}
+                                          onBlur={(e) => {
+                                            const val = e.target.value
+                                            const nextSelected = isSelected
                                               ? [...new Set([...preferredDays, o.value])]
-                                              : preferredDays.filter((d) => d !== o.value)
-                                            const nextDayHours = { ...currentDayHours }
-                                            if (!e.target.checked) {
-                                              delete nextDayHours[o.value]
-                                              delete nextDayHours[String(o.value)]
+                                              : [...preferredDays]
+                                            const current = currentDayHours ? { ...currentDayHours } : {}
+                                            if (val === '' || Number(val) <= 0) {
+                                              delete current[o.value]
+                                              delete current[String(o.value)]
+                                            } else {
+                                              current[o.value] = Number(val)
                                             }
-                                            updateDaySelection(t.id, p.id, nextSelected, nextDayHours)
+                                            updateDaySelection(t.id, p.id, nextSelected, current)
                                           }}
-                                          className="w-3.5 h-3.5 rounded text-indigo-600"
+                                          className="w-12 border border-gray-300 rounded px-1 py-0.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-indigo-400 placeholder-gray-300 disabled:bg-gray-100 disabled:text-gray-300"
                                         />
-                                        <span className="text-[10px] text-gray-600">{o.label}</span>
-                                      </label>
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        step={0.5}
-                                        placeholder="—"
-                                        defaultValue={currentHours !== '' ? currentHours : ''}
-                                        key={`${key}:${weekNumber}:${currentHours}`}
-                                        disabled={!isSelected}
-                                        onBlur={(e) => {
-                                          const val = e.target.value
-                                          const nextSelected = isSelected
-                                            ? [...new Set([...preferredDays, o.value])]
-                                            : [...preferredDays]
-                                          const current = currentDayHours ? { ...currentDayHours } : {}
-                                          if (val === '' || Number(val) <= 0) {
-                                            delete current[o.value]
-                                            delete current[String(o.value)]
-                                          } else {
-                                            current[o.value] = Number(val)
-                                          }
-                                          updateDaySelection(t.id, p.id, nextSelected, current)
-                                        }}
-                                        className="w-12 border border-gray-300 rounded px-1 py-0.5 text-xs text-center focus:outline-none focus:ring-1 focus:ring-indigo-400 placeholder-gray-300 disabled:bg-gray-100 disabled:text-gray-300"
-                                      />
+                                      </div>
+                                      <div className="h-1.5 bg-black/5">
+                                        <div
+                                          className={isHalfDay ? 'bg-amber-500' : 'bg-indigo-500'}
+                                          style={{ height: '100%', width: `${barPct}%`, transition: 'width 0.2s' }}
+                                        />
+                                      </div>
                                     </div>
                                   )
                                 })}
