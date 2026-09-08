@@ -508,9 +508,10 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate }) {
     const cleanDayHours = Object.fromEntries(
       Object.entries(dayHoursObj || {}).filter(([, value]) => Number(value) > 0)
     )
+    await exitAllWeeks(taskId)
     await Promise.all([
-      ...weeksFor(taskId).map((wn) => api.setPreferredDays(taskId, personId, wn, cleanSelectedDays)),
-      ...weeksFor(taskId).map((wn) => api.setDayHours(taskId, personId, wn, Object.keys(cleanDayHours).length ? cleanDayHours : null)),
+      api.setPreferredDays(taskId, personId, weekNumber, cleanSelectedDays),
+      api.setDayHours(taskId, personId, weekNumber, Object.keys(cleanDayHours).length ? cleanDayHours : null),
     ])
     await loadWeekData(weekNumber)
   }
