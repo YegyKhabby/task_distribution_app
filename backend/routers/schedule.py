@@ -51,10 +51,13 @@ def save_schedule(person_id: str, entries: list[VersionedScheduleEntry]):
         for e in entries
         if e.hours >= 0
     ]
+    # Collect unique valid_from dates in this payload and delete existing rows
+    # for those dates first, so removing a day (e.g. unchecking Friday) takes effect.
+    valid_from_dates = list({r["valid_from"] for r in rows}) if rows else []
+    for vf in valid_from_dates:
+        supabase.table("person_schedule").delete().eq("person_id", person_id).eq("valid_from", vf).execute()
     if rows:
-        supabase.table("person_schedule").upsert(
-            rows, on_conflict="person_id,day_of_week,valid_from"
-        ).execute()
+        supabase.table("person_schedule").insert(rows).execute()
     return {"saved": len(rows)}
 
 
