@@ -1063,18 +1063,18 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
                                           placeholder="—"
                                           defaultValue={currentHours !== '' ? currentHours : ''}
                                           key={`${key}:${weekNumber}:${currentHours}`}
-                                          disabled={!isSelected}
+                                          disabled={!isSelected && !isInSchedule}
                                           onBlur={(e) => {
                                             const val = e.target.value
-                                            const nextSelected = isSelected
-                                              ? [...new Set([...preferredDays, o.value])]
-                                              : [...preferredDays]
-                                            const current = currentDayHours ? { ...currentDayHours } : {}
-                                            if (val === '' || Number(val) <= 0) {
+                                            const current = { ...(currentDayHours || {}) }
+                                            let nextSelected = [...preferredDays]
+                                            if (val !== '' && Number(val) > 0) {
+                                              current[o.value] = Number(val)
+                                              nextSelected = [...new Set([...preferredDays, o.value])]
+                                            } else {
                                               delete current[o.value]
                                               delete current[String(o.value)]
-                                            } else {
-                                              current[o.value] = Number(val)
+                                              nextSelected = preferredDays.filter((d) => d !== o.value)
                                             }
                                             updateDaySelection(t.id, p.id, nextSelected, current)
                                           }}
