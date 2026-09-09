@@ -27,9 +27,10 @@ def create_task(body: TaskCreate):
 
 @router.put("/{task_id}")
 def update_task(task_id: str, body: TaskUpdate):
-    updates = {k: v for k, v in body.model_dump().items() if v is not None or k in ('responsible_person', 'schedule_rule', 'notes', 'image_url')}
+    updates = body.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(400, "No fields to update")
+    # Allow explicitly-passed null values through (e.g. clearing notes or image_url)
     res = supabase.table("tasks").update(updates).eq("id", task_id).execute()
     if not res.data:
         raise HTTPException(404, "Task not found")
