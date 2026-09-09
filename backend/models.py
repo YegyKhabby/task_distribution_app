@@ -31,6 +31,7 @@ class TaskCreate(BaseModel):
     split_equally: bool = False           # if True: divide target hours equally among assigned people
     notes: Optional[str] = None
     is_all_weeks: bool = False
+    image_url: Optional[str] = None
 
 
 class TaskUpdate(BaseModel):
@@ -44,6 +45,7 @@ class TaskUpdate(BaseModel):
     split_equally: Optional[bool] = None
     notes: Optional[str] = None
     is_all_weeks: Optional[bool] = None
+    image_url: Optional[str] = None
 
 
 class TaskPersonAssign(BaseModel):

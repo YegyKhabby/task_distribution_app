@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import XLSX from 'xlsx-js-style'
+import { createClient } from '@supabase/supabase-js'
 import { api } from '../api'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { nextMondayDateString } from '../utils/dates'
@@ -209,6 +210,40 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
   // All 4 weeks' per-week settings — kept fresh so save() can detect which
   // weeks are missing an explicit override and initialize them.
   const [allWeekSettings, setAllWeekSettings] = useState([])
+
+  // ── Task images (Supabase Storage) ──
+  const [imageUploading, setImageUploading] = useState(null)
+  const _sbClient = useMemo(() => {
+    const url = import.meta.env.VITE_SUPABASE_URL
+    const key = import.meta.env.VITE_SUPABASE_ANON_KEY
+    if (!url || !key) return null
+    return createClient(url, key)
+  }, [])
+
+  const uploadTaskImage = async (taskId, file) => {
+    if (!_sbClient) { alert('Supabase not configured'); return }
+    setImageUploading(taskId)
+    try {
+      const ext = file.name?.split('.').pop() || 'png'
+      const path = `${taskId}-${Date.now()}.${ext}`
+      const { error } = await _sbClient.storage.from('task-images').upload(path, file, { upsert: true })
+      if (error) throw new Error(error.message)
+      const { data } = _sbClient.storage.from('task-images').getPublicUrl(path)
+      await api.updateTask(taskId, { image_url: data.publicUrl })
+      await onReload()
+    } catch (e) { alert(e.message) } finally { setImageUploading(null) }
+  }
+
+  const removeTaskImage = async (taskId, imageUrl) => {
+    try {
+      if (_sbClient && imageUrl) {
+        const path = imageUrl.split('/task-images/')[1]
+        if (path) await _sbClient.storage.from('task-images').remove([path])
+      }
+      await api.updateTask(taskId, { image_url: null })
+      await onReload()
+    } catch (e) { alert(e.message) }
+  }
 
   // ── Per-task week comparison state ──
   const [reviewTaskId, setReviewTaskId] = useState(null)
@@ -953,6 +988,45 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
                     rows={2}
                     className="w-full text-sm text-gray-700 placeholder-gray-400 bg-white border border-indigo-300 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 focus:border-indigo-500"
                   />
+                  {/* Image attachment */}
+                  {t.image_url ? (
+                    <div className="mt-2 relative inline-block">
+                      <img src={t.image_url} alt="task attachment" className="max-w-full rounded-lg border border-gray-200 max-h-64 object-contain" />
+                      <button
+                        onClick={() => removeTaskImage(t.id, t.image_url)}
+                        className="absolute top-1 right-1 bg-white border border-gray-300 rounded-full w-5 h-5 text-xs text-gray-500 hover:text-red-500 hover:border-red-400 flex items-center justify-center shadow"
+                        title="Remove image"
+                      >✕</button>
+                    </div>
+                  ) : (
+                    <label
+                      className="mt-2 flex items-center justify-center gap-2 cursor-pointer text-xs text-gray-400 hover:text-indigo-500 border-2 border-dashed border-gray-200 hover:border-indigo-300 rounded-lg px-4 py-3 transition-colors"
+                      onPaste={(e) => {
+                        const file = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'))?.getAsFile()
+                        if (file) uploadTaskImage(t.id, file)
+                      }}
+                      onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-indigo-400', 'bg-indigo-50') }}
+                      onDragLeave={(e) => { e.currentTarget.classList.remove('border-indigo-400', 'bg-indigo-50') }}
+                      onDrop={(e) => {
+                        e.preventDefault()
+                        e.currentTarget.classList.remove('border-indigo-400', 'bg-indigo-50')
+                        const file = [...(e.dataTransfer.files || [])].find(f => f.type.startsWith('image/'))
+                        if (file) uploadTaskImage(t.id, file)
+                      }}
+                      tabIndex={0}
+                    >
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0]
+                          if (file) { uploadTaskImage(t.id, file); e.target.value = '' }
+                        }}
+                      />
+                      <span>{imageUploading === t.id ? 'Uploading…' : '📎 Drop image here, click to browse, or paste'}</span>
+                    </label>
+                  )}
                 </div>
                 <div className="px-5 py-4">
                   <div className="flex items-center justify-between mb-3">
