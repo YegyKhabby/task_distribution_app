@@ -1733,11 +1733,29 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
     const varies = !vals.every((v) => v === vals[0])
     if (allZero) return <span className="text-red-500 font-medium text-sm text-right">0h</span>
     if (!varies) return <span className="font-medium text-gray-800 text-sm w-16 text-right">{vals[0]}h</span>
-    const target = fallbackHours ?? vals[0]
+    // Fixed tasks: manager set different amounts per week, app delivers exactly those —
+    // two rows would both show manager values, so just show the per-week grid.
+    const weekGrid = (
+      <div className="flex gap-4">
+        {[1, 2, 3, 4].map((wn) => {
+          const h = byWeek[wn] ?? 0
+          return (
+            <div key={wn} className="text-center w-8 flex flex-col gap-0.5">
+              <div className="text-xs text-gray-400">W{wn}</div>
+              <div className={`text-sm font-semibold ${h === 0 ? 'text-red-500' : 'text-gray-800'}`}>{h}h</div>
+            </div>
+          )
+        })}
+      </div>
+    )
+    if (distType === 'fixed') return weekGrid
+    // Auto/equal: manager set a task-level target; app computes per-person per-week.
+    // Show expected (reference week) vs what app actually gave each week.
+    const expected = fallbackHours ?? vals[0]
     return (
       <div className="flex items-start gap-3">
         <div className="flex flex-col gap-0.5 pt-4 shrink-0">
-          <span className="text-xs text-gray-400 leading-5">{distType === 'fixed' ? 'by manager' : 'expected'}</span>
+          <span className="text-xs text-gray-400 leading-5">expected</span>
           <span className="text-xs text-gray-400 leading-5">by app</span>
         </div>
         <div className="flex gap-4">
@@ -1746,8 +1764,8 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
             return (
               <div key={wn} className="text-center w-8 flex flex-col gap-0.5">
                 <div className="text-xs text-gray-400">W{wn}</div>
-                <div className="text-sm text-gray-400">{target}h</div>
-                <div className={`text-sm font-semibold ${h === 0 ? 'text-red-500' : h < target ? 'text-amber-600' : 'text-gray-800'}`}>{h}h</div>
+                <div className="text-sm text-gray-400">{expected}h</div>
+                <div className={`text-sm font-semibold ${h === 0 ? 'text-red-500' : h < expected ? 'text-amber-600' : 'text-gray-800'}`}>{h}h</div>
               </div>
             )
           })}
