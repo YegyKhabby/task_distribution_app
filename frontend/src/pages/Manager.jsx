@@ -1797,21 +1797,28 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
         const generalWarnings = allPersonWarnings.filter((issue) =>
           (weeklyMap[p.person_id]?.[issue.task_id]?.[issue.week_number] ?? 0) > 0
         )
-        // Person got 0h in a week for an auto/equal task even though the task is
-        // globally balanced (covered by others) — not in weeklyIssues, so we derive
-        // these directly from weeklyMap.
-        const personalShortfalls = [...p.equal, ...p.auto].flatMap((t) => {
-          const byWeek = weeklyMap[p.person_id]?.[t.task_id]
-          if (!byWeek || !t.hours) return []
-          return [1, 2, 3, 4]
-            .filter((wn) => {
-              const given = byWeek[wn] ?? 0
-              return given === 0 && !personWarnings.some(
-                (pw) => pw.task_id === t.task_id && pw.week_number === wn
-              )
-            })
-            .map((wn) => ({ week_number: wn, task_id: t.task_id, task_name: t.task_name, expected_hours: t.hours }))
-        })
+        // Person got 0h in a week despite being assigned — derived from weeklyMap.
+        // For auto/equal: 0h means app couldn't fulfill (globally balanced or not).
+        // For fixed: only warn when the key exists in weeklyMap (= was in unmet_assignments,
+        //   app failed to give fixed hours). A missing key means not assigned that week.
+        const personalShortfalls = [
+          ...[...p.equal, ...p.auto].flatMap((t) => {
+            const byWeek = weeklyMap[p.person_id]?.[t.task_id]
+            if (!byWeek || !t.hours) return []
+            return [1, 2, 3, 4]
+              .filter((wn) => (byWeek[wn] ?? 0) === 0 &&
+                !personWarnings.some((pw) => pw.task_id === t.task_id && pw.week_number === wn))
+              .map((wn) => ({ week_number: wn, task_id: t.task_id, task_name: t.task_name, expected_hours: t.hours }))
+          }),
+          ...p.fixed.flatMap((t) => {
+            const byWeek = weeklyMap[p.person_id]?.[t.task_id]
+            if (!byWeek || !t.hours) return []
+            return [1, 2, 3, 4]
+              .filter((wn) => wn in byWeek && byWeek[wn] === 0 &&
+                !personWarnings.some((pw) => pw.task_id === t.task_id && pw.week_number === wn))
+              .map((wn) => ({ week_number: wn, task_id: t.task_id, task_name: t.task_name, expected_hours: t.hours }))
+          }),
+        ]
 
         const TaskRow = ({ name, taskId, badge, hours, distType }) => {
           const byWeek = weeklyMap[p.person_id]?.[taskId]
