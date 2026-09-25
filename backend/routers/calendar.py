@@ -89,7 +89,15 @@ def distribute_week(
                 alloc(dow, task_id, share)
                 rem = round_half(rem - share)
 
-    normal_tasks = sorted([t for t in tasks if not t.get("is_fill")], key=get_rule_priority)
+    def _effective_priority(t):
+        # Tasks with exact day-hour pins are the most constrained after do_not_split —
+        # they must land on specific days with specific amounts, so they get capacity
+        # before flexible rules (one_day, two_days, proportional, etc.) can consume it.
+        if day_hours_map and t.get("task_id") in day_hours_map:
+            return (2.5, t.get("priority") or 99)
+        return get_rule_priority(t)
+
+    normal_tasks = sorted([t for t in tasks if not t.get("is_fill")], key=_effective_priority)
     fill_tasks   = [t for t in tasks if t.get("is_fill")]
 
     for t in normal_tasks:

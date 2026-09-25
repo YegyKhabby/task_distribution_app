@@ -284,18 +284,39 @@ def compute_preview(week_number: int, week_start_date: date = None):
         task_warning = None
         task_warning_reason = None
         if gap >= 0.5:
+            over_target = total_dist > target + 0.4
             if not assigned:
-                task_warning_reason = "No people are assigned to this task in this week."
+                label = f"{gap}h unassigned"
+                task_warning_reason = "No people are assigned to this task this week."
+            elif over_target:
+                label = f"{gap}h over target"
+                task_warning_reason = (
+                    f"This week's fixed hours total {round_half(task_fixed_totals[tid])}h "
+                    f"but the target is {target}h. The extra {gap}h is still being worked. "
+                    f"Consider raising the weekly target to match."
+                )
             elif not auto_pids and task_fixed_totals[tid] < target:
-                task_warning_reason = "This task only has fixed-hour assignments, and those fixed hours do not cover the weekly target."
+                label = f"{gap}h unassigned"
+                task_warning_reason = (
+                    f"This week's fixed hours cover {round_half(task_fixed_totals[tid])}h "
+                    f"of the {target}h target. The remaining {gap}h has no one assigned. "
+                    f"Assign another person or lower the target."
+                )
             elif auto_pids and sum(person_auto_caps.get(pid, 0) for pid in auto_pids) < 0.5:
-                task_warning_reason = "Assigned people do not have any remaining weekly capacity for auto-distribution."
+                label = f"{gap}h unassigned"
+                task_warning_reason = (
+                    "All assigned people are already at full weekly capacity this week. "
+                    "No hours are available for auto-distribution. "
+                    "Reduce other fixed hours or assign someone else."
+                )
             elif total_dist == 0:
+                label = f"{gap}h unassigned"
                 task_warning_reason = "Higher-priority work consumed the available weekly capacity before this task could receive hours."
             else:
+                label = f"{gap}h unassigned"
                 task_warning_reason = "There was not enough remaining weekly capacity after the other task allocations."
-            task_warning = f"{gap}h short — {task_warning_reason}"
-            warnings.append(f"{task['name']}: {gap}h short")
+            task_warning = f"{label}: {task_warning_reason}"
+            warnings.append(f"{task['name']}: {label}")
 
         result_tasks.append({
             "task_id": tid,

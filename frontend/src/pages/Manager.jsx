@@ -86,7 +86,7 @@ const SCHEDULE_RULES = [
   { value: 'proportional', label: 'Proportional', hint: 'Hours split based on how long each work day is' },
   { value: 'equal_per_day', label: 'Equal per day', hint: 'Same amount of hours on every work day' },
   { value: 'one_day', label: 'One day', hint: 'All hours on the best available day. Splits if needed' },
-  { value: 'do_not_split', label: 'Do not split', hint: 'All hours on one day — warns if capacity does not allow it' },
+  { value: 'do_not_split', label: 'Do not split', hint: 'All hours on one day (warns if capacity does not allow it)' },
   { value: 'two_days', label: 'Two days', hint: 'Split across the 2 best-capacity days' },
   { value: 'flexible_days', label: 'Flexible days', hint: '2 days if capacity fits, expands to 3 if needed' },
   { value: 'first_work_day', label: 'First work day', hint: "All hours on the first working day of the person's week" },
@@ -791,13 +791,13 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
           {/* Warnings for the active week */}
           {weekHours[weekNumber]?.warnings?.length > 0 && (
             <div className="mt-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
-              <p className="text-xs font-semibold text-amber-700 mb-1.5">Under-distributed in Week {weekNumber}:</p>
+              <p className="text-xs font-semibold text-amber-700 mb-1.5">Under-assigned in Week {weekNumber}:</p>
               <div className="flex flex-wrap gap-2">
                 {weekHours[weekNumber].warnings.map(w => (
                   <span key={w.task_id} className="flex items-center gap-1.5 text-xs bg-white border border-amber-200 rounded-lg px-2 py-1">
                     <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: w.color || '#6366f1' }} />
                     <span className="font-medium text-gray-800">{w.name}</span>
-                    <span className="text-amber-600">{w.distributed}h / {w.target}h</span>
+                    <span className="text-amber-600">{w.distributed}h assigned / {w.target}h target</span>
                   </span>
                 ))}
               </div>
@@ -918,7 +918,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
                     ? <span className="text-xs text-emerald-600 font-medium shrink-0">fills spare</span>
                     : t.weekly_hours_target > 0
                       ? <span className="text-sm text-gray-500 shrink-0">{t.weekly_hours_target}h/wk</span>
-                      : <span className="text-xs text-amber-600 font-medium shrink-0" title="No hours set — task will be skipped in distribution">⚠ no hours set</span>
+                      : <span className="text-xs text-amber-600 font-medium shrink-0" title="No hours set: task will be skipped in distribution">⚠ no hours set</span>
                   }
                   {t.schedule_rule && !t.is_fill && (
                     <span className="text-xs text-indigo-400 shrink-0" title={SCHEDULE_RULES.find(r => r.value === t.schedule_rule)?.hint}>
@@ -1341,7 +1341,7 @@ function WeekComparePanel({ task, reviewData, reviewLoading, onClose, onRefresh 
   return (
     <div className="border-t border-indigo-100 bg-indigo-50">
       <div className="flex items-center justify-between px-5 py-2 border-b border-indigo-100">
-        <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Compare weeks — day-hour pins</p>
+        <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Compare weeks: day-hour pins</p>
         <div className="flex items-center gap-2">
           <button
             onClick={onRefresh}
@@ -1524,7 +1524,7 @@ function CompareAllPanel({ data, loading, tasks, onClose, onRefresh }) {
     <div className="bg-white border border-indigo-200 rounded-xl shadow-sm overflow-hidden mb-4">
       <div className="flex items-center justify-between px-5 py-2.5 bg-indigo-50 border-b border-indigo-100">
         <div className="flex items-center gap-3">
-          <p className="text-sm font-semibold text-indigo-800">Week-over-week day-pin differences — all tasks</p>
+          <p className="text-sm font-semibold text-indigo-800">Week-over-week day-pin differences: all tasks</p>
           {tasksWithDiffs.length > 0 ? (
             <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">
               {totalDiffCount} person·task{totalDiffCount !== 1 ? 's' : ''} differ across weeks
@@ -1551,7 +1551,7 @@ function CompareAllPanel({ data, loading, tasks, onClose, onRefresh }) {
       </div>
 
       {tasksWithDiffs.length === 0 ? (
-        <p className="px-5 py-4 text-sm text-gray-400 italic">No differences found — all tasks are consistent across weeks.</p>
+        <p className="px-5 py-4 text-sm text-gray-400 italic">No differences found: all tasks are consistent across weeks.</p>
       ) : (
         <div className="divide-y divide-gray-100">
           {tasksWithDiffs.map(({ taskId, taskName, taskColor, diffPersons }) => (
@@ -1644,15 +1644,19 @@ function CompareAllPanel({ data, loading, tasks, onClose, onRefresh }) {
 
 // ── Distribute Tab helpers ──────────────────────────────────────────────────
 
-function buildPersonBreakdown(preview) {
+function buildPersonBreakdown(preview, allWeeksPreview) {
   const byPerson = {}
+  const seenTasks = {}   // personId -> Set<taskId> — prevents double-adding cross-week tasks
+
   preview.person_summary.forEach((p) => {
     byPerson[p.person_id] = { ...p, fixed: [], equal: [], auto: [], fill: [] }
+    seenTasks[p.person_id] = new Set()
   })
   preview.tasks.forEach((task) => {
     task.distributions.forEach((d) => {
       if (!byPerson[d.person_id]) return
-      const entry = { task_name: task.task_name, hours: d.hours }
+      seenTasks[d.person_id].add(task.task_id)
+      const entry = { task_id: task.task_id, task_name: task.task_name, hours: d.hours }
       if (task.is_fill) byPerson[d.person_id].fill.push(entry)
       else if (d.type === 'fixed') byPerson[d.person_id].fixed.push(entry)
       else if (d.type === 'equal') byPerson[d.person_id].equal.push(entry)
@@ -1661,15 +1665,97 @@ function buildPersonBreakdown(preview) {
     if (!task.is_fill) {
       ;(task.unmet_assignments || []).forEach((u) => {
         if (!byPerson[u.person_id]) return
-        byPerson[u.person_id].auto.push({ task_name: task.task_name, hours: 0, target: task.target_hours })
+        seenTasks[u.person_id].add(task.task_id)
+        byPerson[u.person_id].auto.push({ task_id: task.task_id, task_name: task.task_name, hours: 0, target: task.target_hours })
       })
     }
   })
+
+  // Add tasks that only appear in other weeks (e.g. a fixed task assigned only in W2-W3)
+  // They show as 0h for the current week but their per-week grid will reveal the real values.
+  if (allWeeksPreview) {
+    allWeeksPreview.forEach((weekPreview) => {
+      if (weekPreview.week_number === preview.week_number) return
+      ;(weekPreview.tasks || []).forEach((task) => {
+        if (task.is_fill) return
+        ;(task.distributions || []).forEach((d) => {
+          if (!byPerson[d.person_id]) return
+          if (seenTasks[d.person_id]?.has(task.task_id)) return
+          seenTasks[d.person_id].add(task.task_id)
+          const entry = { task_id: task.task_id, task_name: task.task_name, hours: 0 }
+          if (d.type === 'fixed') byPerson[d.person_id].fixed.push(entry)
+          else if (d.type === 'equal') byPerson[d.person_id].equal.push(entry)
+          else byPerson[d.person_id].auto.push(entry)
+        })
+      })
+    })
+  }
+
   return byPerson
 }
 
-function PersonSummaryCards({ preview }) {
-  const breakdown = buildPersonBreakdown(preview)
+// Returns { personId: { taskId: { weekNum: hours } } } for cross-week comparison
+function buildWeeklyHoursMap(allWeeksPreview) {
+  const map = {}
+  if (!allWeeksPreview) return map
+  allWeeksPreview.forEach((weekPreview) => {
+    const wn = weekPreview.week_number
+    ;(weekPreview.tasks || []).forEach((task) => {
+      ;(task.distributions || []).forEach((d) => {
+        if (!map[d.person_id]) map[d.person_id] = {}
+        if (!map[d.person_id][task.task_id]) map[d.person_id][task.task_id] = {}
+        map[d.person_id][task.task_id][wn] = d.hours
+      })
+      // unmet auto assignments = 0h given that week
+      ;(task.unmet_assignments || []).forEach((u) => {
+        if (!map[u.person_id]) map[u.person_id] = {}
+        if (!map[u.person_id][task.task_id]) map[u.person_id][task.task_id] = {}
+        map[u.person_id][task.task_id][wn] = 0
+      })
+    })
+  })
+  return map
+}
+
+function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
+  const breakdown = buildPersonBreakdown(preview, allWeeksPreview)
+  const weeklyMap = buildWeeklyHoursMap(allWeeksPreview)
+
+  const WeekCols = ({ byWeek, fallbackHours, distType }) => {
+    if (!byWeek) {
+      const h = fallbackHours ?? 0
+      return h === 0
+        ? <span className="text-red-500 font-medium text-sm text-right">0h</span>
+        : <span className="font-medium text-gray-800 text-sm w-16 text-right">{h}h</span>
+    }
+    const vals = [1, 2, 3, 4].map((wn) => byWeek[wn] ?? 0)
+    const allZero = vals.every((v) => v === 0)
+    const varies = !vals.every((v) => v === vals[0])
+    if (allZero) return <span className="text-red-500 font-medium text-sm text-right">0h</span>
+    if (!varies) return <span className="font-medium text-gray-800 text-sm w-16 text-right">{vals[0]}h</span>
+    const target = fallbackHours ?? vals[0]
+    return (
+      <div className="flex items-start gap-3">
+        <div className="flex flex-col gap-0.5 pt-4 shrink-0">
+          <span className="text-xs text-gray-400 leading-5">{distType === 'fixed' ? 'by manager' : 'expected'}</span>
+          <span className="text-xs text-gray-400 leading-5">by app</span>
+        </div>
+        <div className="flex gap-4">
+          {[1, 2, 3, 4].map((wn) => {
+            const h = byWeek[wn] ?? 0
+            return (
+              <div key={wn} className="text-center w-8 flex flex-col gap-0.5">
+                <div className="text-xs text-gray-400">W{wn}</div>
+                <div className="text-sm text-gray-400">{target}h</div>
+                <div className={`text-sm font-semibold ${h === 0 ? 'text-red-500' : h < target ? 'text-amber-600' : 'text-gray-800'}`}>{h}h</div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="mb-6 space-y-3">
       <h3 className="font-semibold text-gray-800">Person Summary</h3>
@@ -1681,103 +1767,128 @@ function PersonSummaryCards({ preview }) {
         const fixedTotal = p.fixed.reduce((s, t) => s + t.hours, 0)
         const equalTotal = p.equal.reduce((s, t) => s + t.hours, 0)
         const autoGiven = p.auto.filter((t) => t.hours > 0).reduce((s, t) => s + t.hours, 0)
-        const fillTotal = p.fill.reduce((s, t) => s + t.hours, 0)
+
+        // Warnings relevant to this person: weeklyIssues for tasks they're assigned to
+        // where the weeklyMap confirms they got 0h that week
+        const allPersonWarnings = (weeklyIssues || []).filter((issue) =>
+          [...p.fixed, ...p.equal, ...p.auto].some((t) => t.task_id === issue.task_id)
+        )
+        const personWarnings = allPersonWarnings.filter((issue) =>
+          (weeklyMap[p.person_id]?.[issue.task_id]?.[issue.week_number] ?? 0) === 0
+        )
+        const generalWarnings = allPersonWarnings.filter((issue) =>
+          (weeklyMap[p.person_id]?.[issue.task_id]?.[issue.week_number] ?? 0) > 0
+        )
+
+        const TaskRow = ({ name, taskId, badge, hours, distType }) => {
+          const byWeek = weeklyMap[p.person_id]?.[taskId]
+          return (
+            <div className="flex items-start gap-3 py-2 border-b border-gray-100 last:border-b-0">
+              <span className="text-gray-700 flex-1 text-sm pt-0.5 min-w-0 truncate">{name}</span>
+              <div className="flex items-start gap-3 shrink-0">
+                <span className="w-12 flex justify-center pt-0.5">{badge}</span>
+                <div className="min-w-[180px] flex justify-end">
+                  <WeekCols byWeek={byWeek} fallbackHours={hours} distType={distType} />
+                </div>
+              </div>
+            </div>
+          )
+        }
 
         return (
           <div key={p.person_id} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
             <div className="flex items-center gap-3 px-5 py-3 bg-gray-50 border-b border-gray-100 flex-wrap">
               <span className="font-medium text-gray-900 flex-1">{p.name}</span>
+              {(personWarnings.length > 0 || generalWarnings.length > 0) && (
+                <span className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                  ⚠ {personWarnings.length + generalWarnings.length} issue{personWarnings.length + generalWarnings.length > 1 ? 's' : ''} (see below)
+                </span>
+              )}
               <span className="text-sm text-gray-500">capacity: {p.weekly_hours}h</span>
               <span className={`text-xs font-medium px-2 py-1 rounded-full ${isOver ? 'bg-red-100 text-red-700' : p.spare_hours > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
-                {isOver ? `${totalAssigned}h assigned / ${p.weekly_hours}h over limit` : `${totalAssigned}h / ${p.weekly_hours}h`}
+                {isOver ? `${totalAssigned}h / ${p.weekly_hours}h (over limit)` : `${totalAssigned}h / ${p.weekly_hours}h`}
               </span>
             </div>
-            <div className="px-5 py-3 space-y-3 text-sm">
+            <div className="px-5 py-1 text-sm">
 
-              <div>
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Fixed</p>
-                {p.fixed.length === 0
-                  ? <p className="text-gray-300 italic">none</p>
-                  : <>
-                    {p.fixed.map((t, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1">
-                        <span className="text-gray-700 flex-1">{t.task_name}</span>
-                        <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">fixed</span>
-                        <span className="text-gray-500 w-24 text-right">{t.hours}h assigned</span>
-                        <span className="font-medium text-gray-800 w-16 text-right">{t.hours}h given</span>
-                      </div>
-                    ))}
-                    <div className="flex items-center text-xs text-gray-400 border-t border-gray-100 pt-1 mt-1">
-                      <span className="flex-1">Fixed subtotal</span>
-                      <span className="font-medium text-gray-500">{fixedTotal}h</span>
+              {p.fixed.length > 0 && (
+                <div className="mt-2 mb-1">
+                  {p.fixed.map((t, i) => (
+                    <TaskRow key={i} name={t.task_name} taskId={t.task_id}
+                      badge={<span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full shrink-0">fixed</span>}
+                      hours={t.hours} distType="fixed" />
+                  ))}
+                  <div className="flex items-center text-xs text-gray-400 pt-1 mt-0.5">
+                    <span className="flex-1 font-semibold uppercase tracking-wide">Fixed subtotal</span>
+                    <span className="font-medium text-gray-500">{fixedTotal}h</span>
+                  </div>
+                </div>
+              )}
+
+              {p.equal.length > 0 && (
+                <div className="mt-2 mb-1 border-t border-gray-100 pt-1">
+                  {p.equal.map((t, i) => (
+                    <TaskRow key={i} name={t.task_name} taskId={t.task_id}
+                      badge={<span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full shrink-0">equal</span>}
+                      hours={t.hours} distType="equal" />
+                  ))}
+                  <div className="flex items-center text-xs text-gray-400 pt-1 mt-0.5">
+                    <span className="flex-1 font-semibold uppercase tracking-wide">Equal subtotal</span>
+                    <span className="font-medium text-gray-500">{equalTotal}h</span>
+                  </div>
+                </div>
+              )}
+
+              {p.auto.length > 0 && (
+                <div className="mt-2 mb-1 border-t border-gray-100 pt-1">
+                  {p.auto.map((t, i) => (
+                    <TaskRow key={i} name={t.task_name} taskId={t.task_id}
+                      badge={<span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full shrink-0">auto</span>}
+                      hours={t.hours} distType="auto" />
+                  ))}
+                  <div className="flex items-center text-xs text-gray-400 pt-1 mt-0.5">
+                    <span className="flex-1 font-semibold uppercase tracking-wide">Auto subtotal</span>
+                    <span className="font-medium text-gray-500">{autoGiven}h</span>
+                  </div>
+                </div>
+              )}
+
+              {p.fill.length > 0 && (
+                <div className="mt-3 border-t border-gray-100 pt-2">
+                  {p.fill.map((t, i) => (
+                    <div key={i} className="flex items-center gap-2 py-1">
+                      <span className="text-gray-400 flex-1 text-sm">Fill: {t.task_name}</span>
+                      <span className="font-medium text-gray-600 text-sm">{t.hours}h</span>
                     </div>
-                  </>
-                }
-              </div>
+                  ))}
+                </div>
+              )}
 
-              <div>
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Equal split</p>
-                {p.equal.length === 0
-                  ? <p className="text-gray-300 italic">none</p>
-                  : <>
-                    {p.equal.map((t, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1">
-                        <span className="text-gray-700 flex-1">{t.task_name}</span>
-                        <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full">equal</span>
-                        <span className="font-medium text-gray-800 w-16 text-right">{t.hours}h given</span>
-                      </div>
-                    ))}
-                    <div className="flex items-center text-xs text-gray-400 border-t border-gray-100 pt-1 mt-1">
-                      <span className="flex-1">Equal split subtotal</span>
-                      <span className="font-medium text-gray-500">{equalTotal}h</span>
+              {(personWarnings.length > 0 || generalWarnings.length > 0) && (
+                <div className="mt-3 border-t border-amber-100 pt-2 space-y-2">
+                  {personWarnings.map((issue, i) => (
+                    <div key={`p-${i}`} className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+                      <p className="text-xs font-semibold text-amber-700">⚠ Week {issue.week_number}: {issue.task_name} : {issue.total_distributed}h assigned of {issue.target_hours}h target</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{issue.reason}</p>
                     </div>
-                  </>
-                }
-              </div>
-
-              <div>
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Auto</p>
-                {p.auto.length === 0
-                  ? <p className="text-gray-300 italic">none</p>
-                  : <>
-                    {p.auto.map((t, i) => (
-                      <div key={i} className="flex items-center gap-2 py-1">
-                        <span className="text-gray-700 flex-1">{t.task_name}</span>
-                        <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">auto</span>
-                        {t.hours === 0 ? (
-                          <>
-                            <span className="text-gray-500 w-24 text-right">{t.target}h assigned</span>
-                            <span className="font-medium text-red-600 w-16 text-right">0h given</span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-gray-400 text-xs text-right">shared</span>
-                            <span className="font-medium text-gray-800 w-16 text-right">{t.hours}h given</span>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                    <div className="flex items-center text-xs text-gray-400 border-t border-gray-100 pt-1 mt-1">
-                      <span className="flex-1">Auto subtotal</span>
-                      <span className="font-medium text-gray-500">{autoGiven}h given</span>
+                  ))}
+                  {generalWarnings.length > 0 && (
+                    <div className="space-y-1.5 mt-1">
+                      <p className="text-xs text-gray-400 font-medium uppercase tracking-wide">
+                        {personWarnings.length > 0 ? 'Also affected' : 'Task shortfalls'}
+                      </p>
+                      {generalWarnings.map((issue, i) => (
+                        <div key={`g-${i}`} className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                          <p className="text-xs font-semibold text-gray-600">↘ Week {issue.week_number}: {issue.task_name} : {issue.total_distributed}h assigned of {issue.target_hours}h target</p>
+                          <p className="text-xs text-gray-400 mt-0.5">{issue.reason}</p>
+                        </div>
+                      ))}
                     </div>
-                  </>
-                }
-              </div>
+                  )}
+                </div>
+              )}
 
-              <div className="border-t border-gray-200 pt-2">
-                {p.fill.length === 0
-                  ? <div className="flex items-center"><span className="text-gray-400 flex-1">Fill</span><span className="font-medium text-gray-600">0h</span></div>
-                  : p.fill.map((t, i) => (
-                    <div key={i} className="flex items-center gap-2 py-0.5">
-                      <span className="text-gray-400 flex-1">Fill: {t.task_name}</span>
-                      <span className="font-medium text-gray-600">{t.hours}h</span>
-                    </div>
-                  ))
-                }
-              </div>
-
-              <div className="flex items-center border-t border-gray-300 pt-2">
+              <div className="flex items-center border-t border-gray-300 py-2 mt-2">
                 <span className="font-semibold text-gray-700 flex-1">Total assigned / capacity</span>
                 <span className={`font-semibold ${isOver ? 'text-red-600' : 'text-gray-800'}`}>
                   {totalAssigned}h / {p.weekly_hours}h
@@ -1797,6 +1908,7 @@ function PersonSummaryCards({ preview }) {
 function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
   const [weekNumber, setWeekNumber] = useState(1)
   const [preview, setPreview] = useState(null)
+  const [allWeeksPreview, setAllWeeksPreview] = useState(null)
   const [weeklyIssues, setWeeklyIssues] = useState([])
   const [postSaveShortfallWarnings, setPostSaveShortfallWarnings] = useState([]) // {week_number, message}
   const [postSaveDailyWarnings, setPostSaveDailyWarnings] = useState([])         // {week_number, message}
@@ -1809,6 +1921,7 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
 
   const applyWeeklyPreviewState = (allWeeks, currentPreview) => {
     setPreview(currentPreview)
+    setAllWeeksPreview(allWeeks)
     setWeeklyIssues(
       allWeeks.flatMap((weekPreview) =>
         (weekPreview.tasks || [])
@@ -1873,6 +1986,7 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
       setConfirmed(result)
       const allWeeks = await Promise.all([1, 2, 3, 4].map((wn) => api.previewDistribution(wn, effectiveFrom)))
       setPreview(allWeeks[weekNumber - 1])
+      setAllWeeksPreview(allWeeks)
 
       // Under-distributed / 0h tasks (covers both partial AND fully missing)
       setWeeklyIssues(
@@ -1967,25 +2081,9 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
 
       {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
 
-      {preview && <PersonSummaryCards preview={preview} />}
+      {preview && <PersonSummaryCards preview={preview} allWeeksPreview={allWeeksPreview} weeklyIssues={weeklyIssues} />}
 
       {/* ── Warnings — always visible, from both Preview and Distribute & Save All ── */}
-
-      {/* Under-distributed tasks (0h or partial) — shown for all weeks */}
-      {weeklyIssues.length > 0 && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-4">
-          <p className="text-sm font-semibold text-amber-800 mb-2">Under-distributed tasks</p>
-          <div className="space-y-2">
-            {weeklyIssues.map((issue) => (
-              <div key={`${issue.week_number}:${issue.task_id}`} className="rounded-lg border border-amber-200 bg-white px-3 py-2">
-                <p className="text-sm font-medium text-gray-900">Week {issue.week_number}: {issue.task_name}</p>
-                <p className="text-sm text-amber-700">{issue.total_distributed}h distributed out of {issue.target_hours}h target</p>
-                <p className="text-xs text-gray-500">{issue.reason}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Post-save: shortfall warnings from all 4 weeks (rule/hours related) */}
       {postSaveShortfallWarnings.length > 0 && (
@@ -2038,7 +2136,7 @@ function DistributeTab({ tasks, people, effectiveFrom, setEffectiveFrom }) {
                     : <span className="text-sm text-gray-500 ml-1">target: {t.target_hours} hrs</span>
                   }
                   <span className={`ml-auto text-sm font-semibold ${t.is_fill || Math.abs(t.total_distributed - t.target_hours) < 0.1 ? 'text-green-600' : 'text-amber-600'}`}>
-                    {t.total_distributed} hrs distributed
+                    {t.total_distributed} hrs assigned
                   </span>
                 </div>
 
