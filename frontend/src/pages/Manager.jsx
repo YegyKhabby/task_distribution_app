@@ -1797,6 +1797,21 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
         const generalWarnings = allPersonWarnings.filter((issue) =>
           (weeklyMap[p.person_id]?.[issue.task_id]?.[issue.week_number] ?? 0) > 0
         )
+        // Person got 0h in a week for an auto/equal task even though the task is
+        // globally balanced (covered by others) — not in weeklyIssues, so we derive
+        // these directly from weeklyMap.
+        const personalShortfalls = [...p.equal, ...p.auto].flatMap((t) => {
+          const byWeek = weeklyMap[p.person_id]?.[t.task_id]
+          if (!byWeek || !t.hours) return []
+          return [1, 2, 3, 4]
+            .filter((wn) => {
+              const given = byWeek[wn] ?? 0
+              return given === 0 && !personWarnings.some(
+                (pw) => pw.task_id === t.task_id && pw.week_number === wn
+              )
+            })
+            .map((wn) => ({ week_number: wn, task_id: t.task_id, task_name: t.task_name, expected_hours: t.hours }))
+        })
 
         const TaskRow = ({ name, taskId, badge, hours, distType }) => {
           const byWeek = weeklyMap[p.person_id]?.[taskId]
@@ -1817,9 +1832,9 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
           <div key={p.person_id} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
             <div className="flex items-center gap-3 px-5 py-3 bg-gray-50 border-b border-gray-100 flex-wrap">
               <span className="font-medium text-gray-900 flex-1">{p.name}</span>
-              {(personWarnings.length > 0 || generalWarnings.length > 0) && (
+              {(personWarnings.length > 0 || generalWarnings.length > 0 || personalShortfalls.length > 0) && (
                 <span className="text-xs font-medium text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                  ⚠ {personWarnings.length + generalWarnings.length} issue{personWarnings.length + generalWarnings.length > 1 ? 's' : ''} (see below)
+                  ⚠ {personWarnings.length + generalWarnings.length + personalShortfalls.length} issue{personWarnings.length + generalWarnings.length + personalShortfalls.length > 1 ? 's' : ''} (see below)
                 </span>
               )}
               <span className="text-sm text-gray-500">capacity: {p.weekly_hours}h</span>
@@ -1882,7 +1897,7 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
                 </div>
               )}
 
-              {(personWarnings.length > 0 || generalWarnings.length > 0) && (
+              {(personWarnings.length > 0 || generalWarnings.length > 0 || personalShortfalls.length > 0) && (
                 <div className="mt-3 border-t border-amber-100 pt-2 space-y-2">
                   {personWarnings.map((issue, i) => (
                     <div key={`p-${i}`} className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
@@ -1890,10 +1905,16 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
                       <p className="text-xs text-gray-500 mt-0.5">{issue.reason}</p>
                     </div>
                   ))}
+                  {personalShortfalls.map((sf, i) => (
+                    <div key={`sf-${i}`} className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+                      <p className="text-xs font-semibold text-amber-700">⚠ Week {sf.week_number}: {sf.task_name} — received 0h (expected {sf.expected_hours}h)</p>
+                      <p className="text-xs text-gray-500 mt-0.5">Task was covered by others this week or could not be scheduled for this person.</p>
+                    </div>
+                  ))}
                   {generalWarnings.length > 0 && (
                     <div className="space-y-1.5 mt-1">
                       <p className="text-xs text-gray-400 font-medium uppercase tracking-wide">
-                        {personWarnings.length > 0 ? 'Also affected' : 'Task shortfalls'}
+                        {(personWarnings.length > 0 || personalShortfalls.length > 0) ? 'Also affected' : 'Task shortfalls'}
                       </p>
                       {generalWarnings.map((issue, i) => (
                         <div key={`g-${i}`} className="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
