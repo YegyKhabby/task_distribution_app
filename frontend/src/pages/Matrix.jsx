@@ -58,11 +58,18 @@ function exportMatrixExcel(people, tasks, distMap, weekNumber) {
   URL.revokeObjectURL(url)
 }
 
+function addDays(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const date = new Date(Date.UTC(y, m - 1, d + days))
+  return date.toISOString().split('T')[0]
+}
+
 export default function Matrix() {
   const [weekNumber, setWeekNumber] = useState(1)
   const [weekStartDate, setWeekStartDate] = useState(nextMondayDateString)
   const [view, setView] = useState('cards') // 'cards' | 'grid'
   const [dist, setDist] = useState([])
+  const [actual, setActual] = useState([])
   const [people, setPeople] = useState([])
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(true)
@@ -79,8 +86,13 @@ export default function Matrix() {
 
   useEffect(() => {
     setLoading(true)
-    api.getDistribution(weekNumber, weekStartDate).then((d) => {
+    const actualWeekStart = addDays(weekStartDate, (weekNumber - 1) * 7)
+    Promise.all([
+      api.getDistribution(weekNumber, weekStartDate),
+      api.getActual(actualWeekStart),
+    ]).then(([d, a]) => {
       setDist(d)
+      setActual(a || [])
       setLoading(false)
     })
   }, [weekNumber, weekStartDate])
@@ -92,9 +104,18 @@ export default function Matrix() {
     distMap[d.person_id][d.task_id] = d.hours_per_week
   }
 
+  // Build actual lookup: person_id -> task_id -> total actual hours
+  const actualMap = {}
+  for (const a of actual) {
+    if (!actualMap[a.person_id]) actualMap[a.person_id] = {}
+    actualMap[a.person_id][a.task_id] = (actualMap[a.person_id][a.task_id] || 0) + (a.hours || 0)
+  }
+
   // Sum of task hours per person
   const personTotalHours = (pid) =>
     Object.values(distMap[pid] || {}).reduce((s, h) => s + h, 0)
+
+  const hasAnyActual = actual.length > 0
 
   return (
     <div>
@@ -150,9 +171,9 @@ export default function Matrix() {
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : view === 'cards' ? (
-        <CardsView people={people} tasks={tasks} distMap={distMap} personTotalHours={personTotalHours} />
+        <CardsView people={people} tasks={tasks} distMap={distMap} actualMap={actualMap} hasAnyActual={hasAnyActual} personTotalHours={personTotalHours} />
       ) : view === 'task' ? (
-        <TaskView people={people} tasks={tasks} distMap={distMap} />
+        <TaskView people={people} tasks={tasks} distMap={distMap} actualMap={actualMap} hasAnyActual={hasAnyActual} />
       ) : (
         <GridView people={people} tasks={tasks} distMap={distMap} />
       )}
@@ -160,7 +181,7 @@ export default function Matrix() {
   )
 }
 
-function CardsView({ people, tasks, distMap, personTotalHours }) {
+function CardsView({ people, tasks, distMap, actualMap, hasAnyActual, personTotalHours }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
       {people.map((p) => {
@@ -168,43 +189,65 @@ function CardsView({ people, tasks, distMap, personTotalHours }) {
         const cap = p.weekly_hours
         const spare = Math.max(0, cap - totalHrs)
         const personDist = distMap[p.id] || {}
+        const personActual = actualMap[p.id] || {}
+        const totalActual = Object.values(personActual).reduce((s, h) => s + h, 0)
 
         return (
           <div key={p.id} className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
             <div className="flex items-baseline justify-between mb-3">
               <h2 className="font-semibold text-gray-900">{p.name}</h2>
-              <span className="text-sm text-gray-500">{cap} hrs/wk</span>
+              <div className="flex items-baseline gap-2">
+                {hasAnyActual && (
+                  <span className="text-xs text-gray-400">
+                    actual: <span className={`font-medium ${totalActual > cap ? 'text-amber-600' : 'text-gray-600'}`}>{totalActual}h</span>
+                  </span>
+                )}
+                <span className="text-sm text-gray-500">{cap} hrs/wk</span>
+              </div>
             </div>
             <div className="space-y-2">
               {tasks.map((t) => {
                 const hrs = personDist[t.id] || 0
-                if (hrs === 0) return null
+                const act = personActual[t.id] || 0
+                if (hrs === 0 && act === 0) return null
                 const pct = Math.min(100, (hrs / cap) * 100)
+                const actPct = Math.min(100, (act / cap) * 100)
+                const actColor = act === 0 ? 'text-red-500' : act < hrs ? 'text-amber-600' : 'text-emerald-600'
                 return (
                   <div key={t.id}>
                     <div className="flex justify-between text-xs text-gray-600 mb-0.5">
-                      <span className="truncate max-w-[70%]">{t.name}</span>
-                      <span className="font-medium">{hrs} hrs</span>
+                      <span className="truncate max-w-[60%]">{t.name}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {hasAnyActual && (
+                          <span className={`text-xs ${actColor}`}>{act}h actual</span>
+                        )}
+                        <span className="font-medium text-gray-500">{hrs}h planned</span>
+                      </div>
                     </div>
-                    <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                       <div
                         className="h-full rounded-full"
-                        style={{
-                          width: `${pct}%`,
-                          backgroundColor: t.color || '#6366f1',
-                        }}
+                        style={{ width: `${pct}%`, backgroundColor: t.color || '#6366f1' }}
                       />
                     </div>
+                    {hasAnyActual && act > 0 && (
+                      <div className="h-1 bg-gray-100 rounded-full overflow-hidden mt-0.5">
+                        <div
+                          className="h-full rounded-full opacity-60"
+                          style={{ width: `${actPct}%`, backgroundColor: act < hrs ? '#d97706' : '#10b981' }}
+                        />
+                      </div>
+                    )}
                   </div>
                 )
               })}
               {spare > 0 && (
                 <div className="mt-3 pt-2 border-t border-gray-100 text-xs text-gray-400 flex justify-between">
-                  <span>Freshdesk spare</span>
+                  <span>Spare capacity</span>
                   <span className="font-medium text-emerald-600">{spare} hrs</span>
                 </div>
               )}
-              {Object.keys(personDist).length === 0 && (
+              {Object.keys(personDist).length === 0 && Object.keys(personActual).length === 0 && (
                 <p className="text-xs text-gray-400 italic">No tasks assigned</p>
               )}
             </div>
@@ -215,7 +258,7 @@ function CardsView({ people, tasks, distMap, personTotalHours }) {
   )
 }
 
-function TaskView({ people, tasks, distMap }) {
+function TaskView({ people, tasks, distMap, actualMap, hasAnyActual }) {
   const activeTasks = tasks.filter((t) =>
     people.some((p) => (distMap[p.id] || {})[t.id] > 0)
   )
@@ -225,6 +268,7 @@ function TaskView({ people, tasks, distMap }) {
       {activeTasks.map((t) => {
         const assignees = people.filter((p) => (distMap[p.id] || {})[t.id] > 0)
         const total = assignees.reduce((s, p) => s + (distMap[p.id][t.id] || 0), 0)
+        const totalActual = assignees.reduce((s, p) => s + ((actualMap[p.id] || {})[t.id] || 0), 0)
         const color = t.color || '#6366f1'
 
         return (
@@ -232,17 +276,27 @@ function TaskView({ people, tasks, distMap }) {
             <div className="flex items-center gap-2 mb-3">
               <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: color }} />
               <h2 className="font-semibold text-gray-900 truncate">{t.name}</h2>
-              <span className="ml-auto text-sm text-gray-500 shrink-0">{total}h total</span>
+              <div className="ml-auto flex items-baseline gap-2 shrink-0">
+                {hasAnyActual && (
+                  <span className={`text-xs ${totalActual < total ? 'text-amber-600' : 'text-emerald-600'}`}>{totalActual}h actual</span>
+                )}
+                <span className="text-sm text-gray-500">{total}h planned</span>
+              </div>
             </div>
             <div className="space-y-2">
               {assignees.map((p) => {
                 const hrs = distMap[p.id][t.id]
+                const act = (actualMap[p.id] || {})[t.id] || 0
                 const pct = Math.min(100, (hrs / total) * 100)
+                const actColor = act === 0 ? 'text-red-500' : act < hrs ? 'text-amber-600' : 'text-emerald-600'
                 return (
                   <div key={p.id}>
                     <div className="flex justify-between text-xs text-gray-600 mb-0.5">
                       <span>{p.name}</span>
-                      <span className="font-medium">{hrs}h</span>
+                      <div className="flex items-center gap-2">
+                        {hasAnyActual && <span className={`text-xs ${actColor}`}>{act}h actual</span>}
+                        <span className="font-medium text-gray-500">{hrs}h planned</span>
+                      </div>
                     </div>
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                       <div
