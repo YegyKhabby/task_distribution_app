@@ -39,9 +39,9 @@ def fetch_all(week_number: int, week_start_date: date):
         override = settings_by_task.get(task["id"])
         if override:
             task["weekly_hours_target"] = override["weekly_hours_target"]
-    assignments = supabase_query(lambda: supabase.table("task_people").select("task_id, person_id").eq("week_number", week_number).execute().data)
+    assignments_raw = supabase_query(lambda: supabase.table("task_people").select("task_id, person_id, day_hours").eq("week_number", week_number).execute().data)
     fixed = supabase_query(lambda: supabase.table("task_fixed_hours").select("task_id, person_id, hours").eq("week_number", week_number).execute().data)
-    return people_raw, tasks, assignments, fixed, holiday_dows
+    return people_raw, tasks, assignments_raw, fixed, holiday_dows
 
 
 def compute_weekly_hours(person):
@@ -155,6 +155,13 @@ def compute_preview(week_number: int, week_start_date: date = None):
     fixed_map: dict[tuple, float] = {}
     for f in fixed_rows:
         fixed_map[(f["task_id"], f["person_id"])] = f["hours"]
+    # If a person has day_hours set but no explicit fixed_hours, treat day_hours sum as fixed
+    for a in assignments:
+        key = (a["task_id"], a["person_id"])
+        if key not in fixed_map and a.get("day_hours"):
+            day_sum = round_half(sum(float(v) for v in a["day_hours"].values()))
+            if day_sum > 0:
+                fixed_map[key] = day_sum
 
     # Total weekly capacity per person
     capacity = {p["id"]: compute_weekly_hours(p) for p in people}

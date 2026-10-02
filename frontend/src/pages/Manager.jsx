@@ -593,8 +593,9 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
       await api.updateTask(taskId, { is_all_weeks: false })
       return
     } else {
-      // Switching to "All weeks": fetch fresh data to avoid stale React state,
-      // then make other weeks exactly match the current week's assignments
+      // Flip UI immediately so the toggle feels instant
+      setThisWeekOnly(prev => { const next = new Set(prev); next.add(taskId); return next })
+
       // Small delay to let any in-flight onBlur saves complete before fetching
       await new Promise(res => setTimeout(res, 300))
       const [freshAssignments, freshFixed] = await Promise.all([
@@ -605,22 +606,20 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
       const taskFixed = freshFixed
       const currentPids = new Set(currentAssignments.map(a => a.person_id))
 
-      // Remove any people in other weeks who aren't in the current week
+      // Remove people from other weeks who aren't in the current week,
+      // and add current week's people to other weeks — run in parallel
       const otherWeekAssignments = allAssignments.filter(
         a => a.task_id === taskId && otherWeeks.includes(a.week_number)
       )
-      await Promise.all(
-        otherWeekAssignments
+      await Promise.all([
+        ...otherWeekAssignments
           .filter(a => !currentPids.has(a.person_id))
-          .map(a => api.unassignPerson(taskId, a.person_id, a.week_number))
-      )
-
-      // Add current week's people to other weeks (upsert is safe for existing)
-      await Promise.all(
-        currentAssignments.flatMap(a =>
+          .map(a => api.unassignPerson(taskId, a.person_id, a.week_number)),
+        ...currentAssignments.flatMap(a =>
           otherWeeks.map(wn => api.assignPerson({ task_id: taskId, person_id: a.person_id, week_number: wn }))
-        )
-      )
+        ),
+      ])
+
       // Copy preferred_days, day_hours, fixed_hours, and weekly hours target to other weeks
       const currentHoursTarget = allWeekSettings.find(
         s => s.task_id === taskId && s.week_number === weekNumber
@@ -637,10 +636,13 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
         ...taskFixed.flatMap(f =>
           otherWeeks.map(wn => api.setFixedHours({ task_id: taskId, person_id: f.person_id, week_number: wn, hours: f.hours }))
         ),
+        // Clear fixed hours in other weeks for people who have NO fixed hours in current week
+        ...currentAssignments
+          .filter(a => !taskFixed.some(f => f.person_id === a.person_id))
+          .flatMap(a => otherWeeks.map(wn => api.setFixedHours({ task_id: taskId, person_id: a.person_id, week_number: wn, hours: 0 }))),
         ...otherWeeks.map(wn => api.updateTaskWeekSettings(taskId, wn, currentHoursTarget)),
+        api.updateTask(taskId, { is_all_weeks: true }),
       ])
-      setThisWeekOnly(prev => { const next = new Set(prev); next.add(taskId); return next })
-      await api.updateTask(taskId, { is_all_weeks: true })
     }
     await loadWeekData(weekNumber)
   }
@@ -977,6 +979,10 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
                     onAutoSave={autoSave}
                     weekNumber={weekNumber}
                     responsiblePersons={responsiblePersons.map(rp => rp.name)}
+                    taskDaySum={[...(assignedMap[t.id] || [])].reduce((total, pid) => {
+                      const dh = dayHoursMap[`${t.id}:${pid}`] || {}
+                      return total + Object.values(dh).reduce((s, v) => s + Number(v), 0)
+                    }, 0)}
                   />
                 </div>
                 <div className="px-5 pt-3 pb-3 border-b border-gray-100">
@@ -1089,20 +1095,33 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
 
                           {isAssigned && (
                             <>
-                              <div className="flex items-center gap-2">
-                                <input
-                                  key={`${key}:${weekNumber}:${fixed ?? ''}`}
-                                  type="number"
-                                  min={0}
-                                  step={0.5}
-                                  placeholder="auto"
-                                  defaultValue={fixed || ''}
-                                  onChange={(e) => debouncedUpdateFixed(t.id, p.id, e.target.value || 0)}
-                                  onBlur={(e) => updateFixed(t.id, p.id, e.target.value || 0)}
-                                  className="w-20 border border-gray-300 rounded-md px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400 placeholder-gray-300"
-                                />
-                                <span className="text-xs text-gray-400">{fixed ? 'fixed hrs' : 'auto'}</span>
-                              </div>
+                              {(() => {
+                                const daySum = Object.values(currentDayHours).reduce((s, v) => s + Number(v), 0)
+                                const mismatch = daySum > 0 && fixed && Math.abs(daySum - fixed) >= 0.01
+                                return (
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      key={`${key}:${weekNumber}:${fixed ?? ''}`}
+                                      type="number"
+                                      min={0}
+                                      step={0.5}
+                                      placeholder="auto"
+                                      defaultValue={fixed || ''}
+                                      onChange={(e) => debouncedUpdateFixed(t.id, p.id, e.target.value || 0)}
+                                      onBlur={(e) => updateFixed(t.id, p.id, e.target.value || 0)}
+                                      className="w-20 border border-gray-300 rounded-md px-2 py-1 text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-400 placeholder-gray-300"
+                                    />
+                                    <span className="text-xs text-gray-400">
+                                      {fixed ? 'fixed hrs' : 'auto'}
+                                    </span>
+                                    {daySum > 0 && (
+                                      <span className={`text-xs px-1.5 py-0.5 rounded ${mismatch ? 'text-amber-600 bg-amber-50' : 'text-gray-400'}`}>
+                                        {mismatch ? `day plan: ${daySum}h` : `= ${daySum}h`}
+                                      </span>
+                                    )}
+                                  </div>
+                                )
+                              })()}
                               <div className="flex items-center gap-2 flex-wrap">
                                 {DAY_OPTIONS.map((o) => {
                                   const isSelected = preferredDays.includes(o.value) || currentDayHours[String(o.value)] != null || currentDayHours[o.value] != null
@@ -1220,7 +1239,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
   )
 }
 
-function TaskForm({ form, setForm, error, onSave, onCancel, onAutoSave, isNew, weekNumber = 1, responsiblePersons }) {
+function TaskForm({ form, setForm, error, onSave, onCancel, onAutoSave, isNew, weekNumber = 1, responsiblePersons, taskDaySum = 0 }) {
   // For existing tasks: call onAutoSave with changed fields immediately.
   // For new tasks: fields are collected and saved all at once on "Add".
   const auto = (fields) => { if (!isNew && onAutoSave) onAutoSave(fields) }
@@ -1240,15 +1259,26 @@ function TaskForm({ form, setForm, error, onSave, onCancel, onAutoSave, isNew, w
       </div>
       <div className="flex flex-col gap-1 w-28">
         <span className="text-xs text-gray-400">Hrs / week{!isNew ? ` W${weekNumber}` : ''}</span>
-        <input
-          type="number" min={0} step={0.5}
-          className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-          placeholder="0"
-          value={form.weekly_hours_target}
-          onChange={(e) => setForm({ ...form, weekly_hours_target: e.target.value })}
-          onBlur={(e) => auto({ weekly_hours_target: e.target.value })}
-          disabled={form.is_fill}
-        />
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number" min={0} step={0.5}
+            className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 w-full"
+            placeholder="0"
+            value={form.weekly_hours_target}
+            onChange={(e) => setForm({ ...form, weekly_hours_target: e.target.value })}
+            onBlur={(e) => auto({ weekly_hours_target: e.target.value })}
+            disabled={form.is_fill}
+          />
+          {taskDaySum > 0 && (() => {
+            const target = Number(form.weekly_hours_target) || 0
+            const mismatch = Math.abs(taskDaySum - target) >= 0.01
+            return (
+              <span className={`text-xs whitespace-nowrap ${mismatch ? 'text-amber-600' : 'text-gray-400'}`}>
+                {mismatch ? `day: ${taskDaySum}h` : `= ${taskDaySum}h`}
+              </span>
+            )
+          })()}
+        </div>
       </div>
       <div className="flex flex-col gap-1 w-20">
         <span className="text-xs text-gray-400">Priority</span>
@@ -1694,6 +1724,36 @@ function buildPersonBreakdown(preview, allWeeksPreview) {
   return byPerson
 }
 
+// Returns { taskId: { weekNum: targetHours } } from the per-week backend data
+function buildTaskTargetMap(allWeeksPreview) {
+  const map = {}
+  if (!allWeeksPreview) return map
+  allWeeksPreview.forEach((weekPreview) => {
+    const wn = weekPreview.week_number
+    ;(weekPreview.tasks || []).forEach((task) => {
+      if (!map[task.task_id]) map[task.task_id] = {}
+      map[task.task_id][wn] = task.target_hours ?? 0
+    })
+  })
+  return map
+}
+
+// Returns { taskId: uniqueAssigneeCount } across all weeks (distributions + unmet)
+function buildTaskAssigneeCountMap(allWeeksPreview) {
+  const people = {}
+  if (!allWeeksPreview) return {}
+  allWeeksPreview.forEach((weekPreview) => {
+    ;(weekPreview.tasks || []).forEach((task) => {
+      if (!people[task.task_id]) people[task.task_id] = new Set()
+      ;(task.distributions || []).forEach((d) => people[task.task_id].add(d.person_id))
+      ;(task.unmet_assignments || []).forEach((u) => people[task.task_id].add(u.person_id))
+    })
+  })
+  const result = {}
+  for (const [tid, set] of Object.entries(people)) result[tid] = set.size
+  return result
+}
+
 // Returns { personId: { taskId: { weekNum: hours } } } for cross-week comparison
 function buildWeeklyHoursMap(allWeeksPreview) {
   const map = {}
@@ -1720,8 +1780,11 @@ function buildWeeklyHoursMap(allWeeksPreview) {
 function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
   const breakdown = buildPersonBreakdown(preview, allWeeksPreview)
   const weeklyMap = buildWeeklyHoursMap(allWeeksPreview)
+  const taskTargetMap = buildTaskTargetMap(allWeeksPreview)
+  const taskAssigneeCount = buildTaskAssigneeCountMap(allWeeksPreview)
 
-  const WeekCols = ({ byWeek, fallbackHours, distType }) => {
+  // targetByWeek: per-week task target (only passed for single-assignee auto tasks)
+  const WeekCols = ({ byWeek, fallbackHours, targetByWeek }) => {
     if (!byWeek) {
       const h = fallbackHours ?? 0
       return h === 0
@@ -1730,12 +1793,41 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
     }
     const vals = [1, 2, 3, 4].map((wn) => byWeek[wn] ?? 0)
     const allZero = vals.every((v) => v === 0)
-    const varies = !vals.every((v) => v === vals[0])
     if (allZero) return <span className="text-red-500 font-medium text-sm text-right">0h</span>
+
+    // Single-assignee auto: show target vs given when there is a gap
+    if (targetByWeek) {
+      const targetVals = [1, 2, 3, 4].map((wn) => targetByWeek[wn] ?? 0)
+      const anyGap = targetVals.some((t, i) => Math.abs(t - vals[i]) >= 0.01)
+      if (anyGap) {
+        return (
+          <div className="flex items-start gap-3">
+            <div className="flex flex-col gap-0.5 pt-4 shrink-0">
+              <span className="text-xs text-gray-400 leading-5">target</span>
+              <span className="text-xs text-gray-400 leading-5">given</span>
+            </div>
+            <div className="flex gap-4">
+              {[1, 2, 3, 4].map((wn, i) => {
+                const tH = targetVals[i]
+                const gH = vals[i]
+                return (
+                  <div key={wn} className="text-center w-8 flex flex-col gap-0.5">
+                    <div className="text-xs text-gray-400">W{wn}</div>
+                    <div className="text-sm text-gray-400">{tH}h</div>
+                    <div className={`text-sm font-semibold ${gH === 0 ? 'text-red-500' : gH < tH ? 'text-amber-600' : 'text-gray-800'}`}>{gH}h</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )
+      }
+    }
+
+    const varies = !vals.every((v) => v === vals[0])
     if (!varies) return <span className="font-medium text-gray-800 text-sm w-16 text-right">{vals[0]}h</span>
-    // Fixed tasks: manager set different amounts per week, app delivers exactly those —
-    // two rows would both show manager values, so just show the per-week grid.
-    const weekGrid = (
+
+    return (
       <div className="flex gap-4">
         {[1, 2, 3, 4].map((wn) => {
           const h = byWeek[wn] ?? 0
@@ -1746,30 +1838,6 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
             </div>
           )
         })}
-      </div>
-    )
-    if (distType === 'fixed') return weekGrid
-    // Auto/equal: manager set a task-level target; app computes per-person per-week.
-    // Show expected (reference week) vs what app actually gave each week.
-    const expected = fallbackHours ?? vals[0]
-    return (
-      <div className="flex items-start gap-3">
-        <div className="flex flex-col gap-0.5 pt-4 shrink-0">
-          <span className="text-xs text-gray-400 leading-5">expected</span>
-          <span className="text-xs text-gray-400 leading-5">by app</span>
-        </div>
-        <div className="flex gap-4">
-          {[1, 2, 3, 4].map((wn) => {
-            const h = byWeek[wn] ?? 0
-            return (
-              <div key={wn} className="text-center w-8 flex flex-col gap-0.5">
-                <div className="text-xs text-gray-400">W{wn}</div>
-                <div className="text-sm text-gray-400">{expected}h</div>
-                <div className={`text-sm font-semibold ${h === 0 ? 'text-red-500' : h < expected ? 'text-amber-600' : 'text-gray-800'}`}>{h}h</div>
-              </div>
-            )
-          })}
-        </div>
       </div>
     )
   }
@@ -1801,26 +1869,18 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
         // For auto/equal: 0h means app couldn't fulfill (globally balanced or not).
         // For fixed: only warn when the key exists in weeklyMap (= was in unmet_assignments,
         //   app failed to give fixed hours). A missing key means not assigned that week.
-        const personalShortfalls = [
-          ...[...p.equal, ...p.auto].flatMap((t) => {
-            const byWeek = weeklyMap[p.person_id]?.[t.task_id]
-            if (!byWeek || !t.hours) return []
-            return [1, 2, 3, 4]
-              .filter((wn) => (byWeek[wn] ?? 0) === 0 &&
-                !personWarnings.some((pw) => pw.task_id === t.task_id && pw.week_number === wn))
-              .map((wn) => ({ week_number: wn, task_id: t.task_id, task_name: t.task_name, expected_hours: t.hours }))
-          }),
-          ...p.fixed.flatMap((t) => {
-            const byWeek = weeklyMap[p.person_id]?.[t.task_id]
-            if (!byWeek || !t.hours) return []
-            return [1, 2, 3, 4]
-              .filter((wn) => wn in byWeek && byWeek[wn] === 0 &&
-                !personWarnings.some((pw) => pw.task_id === t.task_id && pw.week_number === wn))
-              .map((wn) => ({ week_number: wn, task_id: t.task_id, task_name: t.task_name, expected_hours: t.hours }))
-          }),
-        ]
+        // Fixed tasks always get exactly what the manager set (including intentional 0h weeks)
+        // so there is never a real shortfall to warn about for fixed tasks.
+        const personalShortfalls = [...p.equal, ...p.auto].flatMap((t) => {
+          const byWeek = weeklyMap[p.person_id]?.[t.task_id]
+          if (!byWeek || !t.hours) return []
+          return [1, 2, 3, 4]
+            .filter((wn) => (byWeek[wn] ?? 0) === 0 &&
+              !personWarnings.some((pw) => pw.task_id === t.task_id && pw.week_number === wn))
+            .map((wn) => ({ week_number: wn, task_id: t.task_id, task_name: t.task_name, expected_hours: t.hours }))
+        })
 
-        const TaskRow = ({ name, taskId, badge, hours, distType }) => {
+        const TaskRow = ({ name, taskId, badge, hours, targetByWeek }) => {
           const byWeek = weeklyMap[p.person_id]?.[taskId]
           return (
             <div className="flex items-start gap-3 py-2 border-b border-gray-100 last:border-b-0">
@@ -1828,7 +1888,7 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
               <div className="flex items-start gap-3 shrink-0">
                 <span className="w-12 flex justify-center pt-0.5">{badge}</span>
                 <div className="min-w-[180px] flex justify-end">
-                  <WeekCols byWeek={byWeek} fallbackHours={hours} distType={distType} />
+                  <WeekCols byWeek={byWeek} fallbackHours={hours} targetByWeek={targetByWeek} />
                 </div>
               </div>
             </div>
@@ -1856,7 +1916,7 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
                   {p.fixed.map((t, i) => (
                     <TaskRow key={i} name={t.task_name} taskId={t.task_id}
                       badge={<span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full shrink-0">fixed</span>}
-                      hours={t.hours} distType="fixed" />
+                      hours={t.hours} />
                   ))}
                   <div className="flex items-center text-xs text-gray-400 pt-1 mt-0.5">
                     <span className="flex-1 font-semibold uppercase tracking-wide">Fixed subtotal</span>
@@ -1870,7 +1930,7 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
                   {p.equal.map((t, i) => (
                     <TaskRow key={i} name={t.task_name} taskId={t.task_id}
                       badge={<span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full shrink-0">equal</span>}
-                      hours={t.hours} distType="equal" />
+                      hours={t.hours} />
                   ))}
                   <div className="flex items-center text-xs text-gray-400 pt-1 mt-0.5">
                     <span className="flex-1 font-semibold uppercase tracking-wide">Equal subtotal</span>
@@ -1884,7 +1944,8 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
                   {p.auto.map((t, i) => (
                     <TaskRow key={i} name={t.task_name} taskId={t.task_id}
                       badge={<span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full shrink-0">auto</span>}
-                      hours={t.hours} distType="auto" />
+                      hours={t.hours}
+                      targetByWeek={taskAssigneeCount[t.task_id] === 1 ? taskTargetMap[t.task_id] : null} />
                   ))}
                   <div className="flex items-center text-xs text-gray-400 pt-1 mt-0.5">
                     <span className="flex-1 font-semibold uppercase tracking-wide">Auto subtotal</span>
@@ -1914,7 +1975,7 @@ function PersonSummaryCards({ preview, allWeeksPreview, weeklyIssues }) {
                   ))}
                   {personalShortfalls.map((sf, i) => (
                     <div key={`sf-${i}`} className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
-                      <p className="text-xs font-semibold text-amber-700">⚠ Week {sf.week_number}: {sf.task_name} — received 0h (expected {sf.expected_hours}h)</p>
+                      <p className="text-xs font-semibold text-amber-700">⚠ Week {sf.week_number}: {sf.task_name}: received 0h (expected {sf.expected_hours}h)</p>
                       <p className="text-xs text-gray-500 mt-0.5">Task was covered by others this week or could not be scheduled for this person.</p>
                     </div>
                   ))}
