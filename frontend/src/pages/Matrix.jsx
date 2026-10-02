@@ -3,49 +3,88 @@ import XLSX from 'xlsx-js-style'
 import { api } from '../api'
 import { nextMondayDateString } from '../utils/dates'
 
-function exportMatrixExcel(people, tasks, distMap, weekNumber) {
+function exportMatrixExcel(people, tasks, distMap, actualMap, weekNumber, hasAnyActual) {
   const activeTasks = tasks.filter(t => people.some(p => (distMap[p.id] || {})[t.id] > 0))
   const HDR = { fill: { fgColor: { rgb: '312E81' } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
-  const TOT = { fill: { fgColor: { rgb: 'F0FDF4' } }, font: { bold: true, color: { rgb: '166534' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+  const TOT_P = { fill: { fgColor: { rgb: 'F0FDF4' } }, font: { bold: true, color: { rgb: '166534' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+  const TOT_A = { fill: { fgColor: { rgb: 'FEF2F2' } }, font: { bold: true, color: { rgb: 'DC2626' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
   const NUM = { alignment: { horizontal: 'center', vertical: 'center' }, font: { sz: 10 } }
   const ws = {}
-  const ncols = 2 + activeTasks.length  // Person, tasks..., Total
+  const ncols = 2 + activeTasks.length
+  const rowsPerPerson = hasAnyActual ? 2 : 1
   const setCell = (r, c, v, t, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { v: v ?? '', t: t || (typeof v === 'number' ? 'n' : 's'), s: s || {} } }
-  const setFormula = (r, c, formula, s) => { ws[XLSX.utils.encode_cell({ r, c })] = { t: 'n', f: formula, s: s || {} } }
-  const col = (c) => XLSX.utils.encode_col(c)
 
   // Header row
   setCell(0, 0, 'Person', 's', { ...HDR, alignment: { horizontal: 'left', vertical: 'center' } })
   activeTasks.forEach((t, i) => setCell(0, 1 + i, t.name, 's', HDR))
   setCell(0, ncols - 1, 'Total', 's', HDR)
 
-  // Person rows
-  for (let ri = 0; ri < people.length; ri++) {
-    const p = people[ri]
+  // Person rows (two rows per person when actual data exists)
+  for (let pi = 0; pi < people.length; pi++) {
+    const p = people[pi]
     const pDist = distMap[p.id] || {}
-    const pTotal = Object.values(pDist).reduce((s, h) => s + h, 0)
-    const bg = ri % 2 === 0 ? 'FFFFFF' : 'F9FAFB'
-    setCell(ri + 1, 0, p.name, 's', { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } })
+    const pActual = (actualMap || {})[p.id] || {}
+    const pTotal = activeTasks.reduce((s, t) => s + (pDist[t.id] || 0), 0)
+    const pActualTotal = activeTasks.reduce((s, t) => s + (pActual[t.id] || 0), 0)
+    const bg = pi % 2 === 0 ? 'FFFFFF' : 'F9FAFB'
+    const plannedRow = 1 + pi * rowsPerPerson
+    const actualRow = plannedRow + 1
+
+    // Planned row
+    setCell(plannedRow, 0, p.name, 's', { fill: { fgColor: { rgb: bg } }, font: { bold: true, sz: 10 }, alignment: { horizontal: 'left', vertical: 'center' } })
     activeTasks.forEach((t, i) => {
       const hrs = pDist[t.id] || 0
       const colorHex = (t.color || '').replace('#', '')
       const cellStyle = hrs > 0 && colorHex
         ? { fill: { fgColor: { rgb: colorHex } }, font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
         : { ...NUM, fill: { fgColor: { rgb: bg } } }
-      setCell(ri + 1, 1 + i, hrs > 0 ? hrs : '', hrs > 0 ? 'n' : 's', cellStyle)
+      setCell(plannedRow, 1 + i, hrs > 0 ? hrs : '', hrs > 0 ? 'n' : 's', cellStyle)
     })
-    if (activeTasks.length > 0) setFormula(ri + 1, ncols - 1, `SUM(B${ri + 2}:${col(ncols - 2)}${ri + 2})`, { ...NUM, font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: bg } } })
-    else setCell(ri + 1, ncols - 1, '', 's', { ...NUM, font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: bg } } })
+    setCell(plannedRow, ncols - 1, pTotal > 0 ? pTotal : '', pTotal > 0 ? 'n' : 's', { ...NUM, font: { bold: true, sz: 10 }, fill: { fgColor: { rgb: bg } } })
+
+    // Actual row
+    if (hasAnyActual) {
+      setCell(actualRow, 0, 'actual', 's', { fill: { fgColor: { rgb: bg } }, font: { sz: 9, italic: true, color: { rgb: '9CA3AF' } }, alignment: { horizontal: 'left', vertical: 'center' } })
+      activeTasks.forEach((t, i) => {
+        const hrs = pDist[t.id] || 0
+        const act = pActual[t.id] || 0
+        const differs = Math.abs(hrs - act) >= 0.01 && (hrs > 0 || act > 0)
+        const actStyle = differs
+          ? { fill: { fgColor: { rgb: bg } }, font: { bold: true, color: { rgb: 'DC2626' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+          : { fill: { fgColor: { rgb: bg } }, font: { color: { rgb: '9CA3AF' }, sz: 10 }, alignment: { horizontal: 'center', vertical: 'center' } }
+        const showVal = act > 0 || differs
+        setCell(actualRow, 1 + i, showVal ? act : '', showVal ? 'n' : 's', actStyle)
+      })
+      const totDiffers = Math.abs(pTotal - pActualTotal) >= 0.01
+      setCell(actualRow, ncols - 1, pActualTotal > 0 ? pActualTotal : '', pActualTotal > 0 ? 'n' : 's', {
+        fill: { fgColor: { rgb: bg } },
+        font: { bold: totDiffers, color: { rgb: totDiffers ? 'DC2626' : '9CA3AF' }, sz: 10 },
+        alignment: { horizontal: 'center', vertical: 'center' },
+      })
+    }
   }
 
-  // Totals row
-  const totRow = people.length + 1
-  setCell(totRow, 0, 'Total', 's', { ...TOT, alignment: { horizontal: 'left', vertical: 'center' } })
-  activeTasks.forEach((t, i) => setFormula(totRow, 1 + i, `SUM(${col(1 + i)}2:${col(1 + i)}${totRow})`, TOT))
-  if (activeTasks.length > 0) setFormula(totRow, ncols - 1, `SUM(B${totRow + 1}:${col(ncols - 2)}${totRow + 1})`, TOT)
-  else setCell(totRow, ncols - 1, '', 's', TOT)
+  // Totals rows
+  const totRow = 1 + people.length * rowsPerPerson
+  setCell(totRow, 0, 'Total Planned', 's', { ...TOT_P, alignment: { horizontal: 'left', vertical: 'center' } })
+  activeTasks.forEach((t, i) => {
+    const total = people.reduce((s, p) => s + ((distMap[p.id] || {})[t.id] || 0), 0)
+    setCell(totRow, 1 + i, total > 0 ? total : '', total > 0 ? 'n' : 's', TOT_P)
+  })
+  setCell(totRow, ncols - 1, people.reduce((s, p) => s + activeTasks.reduce((ts, t) => ts + ((distMap[p.id] || {})[t.id] || 0), 0), 0), 'n', TOT_P)
 
-  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totRow, c: ncols - 1 } })
+  if (hasAnyActual) {
+    const actTotRow = totRow + 1
+    setCell(actTotRow, 0, 'Total Actual', 's', { ...TOT_A, alignment: { horizontal: 'left', vertical: 'center' } })
+    activeTasks.forEach((t, i) => {
+      const total = people.reduce((s, p) => s + (((actualMap || {})[p.id] || {})[t.id] || 0), 0)
+      setCell(actTotRow, 1 + i, total > 0 ? total : '', total > 0 ? 'n' : 's', TOT_A)
+    })
+    setCell(actTotRow, ncols - 1, people.reduce((s, p) => s + activeTasks.reduce((ts, t) => ts + (((actualMap || {})[p.id] || {})[t.id] || 0), 0), 0), 'n', TOT_A)
+  }
+
+  const lastRow = totRow + (hasAnyActual ? 1 : 0)
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: lastRow, c: ncols - 1 } })
   ws['!cols'] = [{ wch: 16 }, ...activeTasks.map(t => ({ wch: Math.max(10, Math.min(20, t.name.length)) })), { wch: 8 }]
   ws['!freeze'] = { xSplit: 1, ySplit: 1 }
 
@@ -137,7 +176,7 @@ export default function Matrix() {
           ))}
         </div>
         <button
-          onClick={() => exportMatrixExcel(people, tasks, distMap, weekNumber)}
+          onClick={() => exportMatrixExcel(people, tasks, distMap, actualMap, weekNumber, hasAnyActual)}
           className="text-sm text-gray-600 border border-gray-200 px-3 py-1 rounded-lg hover:bg-gray-50"
         >
           Download Excel
