@@ -128,12 +128,12 @@ export default function Matrix() {
     const actualWeekStart = addDays(weekStartDate, (weekNumber - 1) * 7)
     Promise.all([
       api.getDistribution(weekNumber, weekStartDate),
-      api.getActual(actualWeekStart),
+      api.getActual(actualWeekStart).catch(() => []),
     ]).then(([d, a]) => {
       setDist(d)
       setActual(a || [])
       setLoading(false)
-    })
+    }).catch(() => setLoading(false))
   }, [weekNumber, weekStartDate])
 
   // Build lookup: person_id -> task_id -> hours
