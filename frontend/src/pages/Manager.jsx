@@ -625,12 +625,12 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
         s => s.task_id === taskId && s.week_number === weekNumber
       )?.weekly_hours_target ?? tasks.find(t => t.id === taskId)?.weekly_hours_target ?? 0
       await Promise.all([
+        // Always propagate preferred_days and day_hours even when empty,
+        // so unchecking a day in the current week clears it in other weeks too
         ...currentAssignments.flatMap(a =>
           otherWeeks.flatMap(wn => [
-            ...(a.preferred_days ? [api.setPreferredDays(taskId, a.person_id, wn, a.preferred_days)] : []),
-            ...(a.day_hours && Object.keys(a.day_hours).length > 0
-              ? [api.setDayHours(taskId, a.person_id, wn, a.day_hours)]
-              : []),
+            api.setPreferredDays(taskId, a.person_id, wn, a.preferred_days ?? []),
+            ...(a.day_hours != null ? [api.setDayHours(taskId, a.person_id, wn, a.day_hours)] : []),
           ])
         ),
         ...taskFixed.flatMap(f =>
