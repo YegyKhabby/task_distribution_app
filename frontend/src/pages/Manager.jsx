@@ -519,8 +519,8 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
   }
 
   // ── Assignment actions ──
-  // Individual changes always target only the current week and exit "All weeks" mode.
-  // "All weeks" is a one-time copy action (via the toggle), not a persistent propagation mode.
+  // Individual changes always target only the current week and flip the toggle to "Week only".
+  // "All weeks" is a copy action via the toggle — it copies everything including blanks.
   const exitAllWeeks = async (taskId) => {
     if (thisWeekOnly.has(taskId)) {
       setThisWeekOnly(prev => { const next = new Set(prev); next.delete(taskId); return next })
@@ -532,9 +532,12 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
     const key = `${taskId}:${personId}`
     setSaving((s) => ({ ...s, [key]: true }))
     await exitAllWeeks(taskId)
-    currently_assigned
-      ? await api.unassignPerson(taskId, personId, weekNumber)
-      : await api.assignPerson({ task_id: taskId, person_id: personId, week_number: weekNumber })
+    if (currently_assigned) {
+      await api.unassignPerson(taskId, personId, weekNumber)
+      await api.setFixedHours({ task_id: taskId, person_id: personId, week_number: weekNumber, hours: 0 })
+    } else {
+      await api.assignPerson({ task_id: taskId, person_id: personId, week_number: weekNumber })
+    }
     await loadWeekData(weekNumber)
     setSaving((s) => ({ ...s, [key]: false }))
   }
@@ -562,7 +565,6 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
   }
 
   const updateDayHours = async (taskId, personId, dayHoursObj) => {
-    // dayHoursObj: {1: 2.0, 3: 1.0} — only days with values, or {} to clear all
     await exitAllWeeks(taskId)
     const payload = Object.keys(dayHoursObj).length ? dayHoursObj : null
     await api.setDayHours(taskId, personId, weekNumber, payload)
@@ -611,10 +613,10 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
       const otherWeekAssignments = allAssignments.filter(
         a => a.task_id === taskId && otherWeeks.includes(a.week_number)
       )
+      const removedFromOtherWeeks = otherWeekAssignments.filter(a => !currentPids.has(a.person_id))
       await Promise.all([
-        ...otherWeekAssignments
-          .filter(a => !currentPids.has(a.person_id))
-          .map(a => api.unassignPerson(taskId, a.person_id, a.week_number)),
+        ...removedFromOtherWeeks.map(a => api.unassignPerson(taskId, a.person_id, a.week_number)),
+        ...removedFromOtherWeeks.map(a => api.setFixedHours({ task_id: taskId, person_id: a.person_id, week_number: a.week_number, hours: 0 })),
         ...currentAssignments.flatMap(a =>
           otherWeeks.map(wn => api.assignPerson({ task_id: taskId, person_id: a.person_id, week_number: wn }))
         ),
@@ -630,7 +632,7 @@ function TasksTab({ tasks, people, onReload, planningDate, setPlanningDate, sche
         ...currentAssignments.flatMap(a =>
           otherWeeks.flatMap(wn => [
             api.setPreferredDays(taskId, a.person_id, wn, a.preferred_days ?? []),
-            ...(a.day_hours != null ? [api.setDayHours(taskId, a.person_id, wn, a.day_hours)] : []),
+            api.setDayHours(taskId, a.person_id, wn, a.day_hours ?? null),
           ])
         ),
         ...taskFixed.flatMap(f =>
