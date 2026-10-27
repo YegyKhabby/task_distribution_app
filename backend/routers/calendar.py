@@ -1360,11 +1360,6 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
             is_work_day   = scheduled_hrs > 0
             is_absent     = str(actual_date) in absent_dates
 
-            # Week-row totals should match the visible Mon-Fri row, including
-            # cross-month days that are rendered in the same week block.
-            if is_work_day and not is_absent:
-                week_total += scheduled_hrs
-
             daily_tasks = []
             if is_work_day and not is_absent:
                 for task_id, hours in allocations.get(dow, {}).items():
@@ -1376,6 +1371,7 @@ def get_calendar(year: int, month: int, person_id: str = Query(...), from_week: 
                             "task_color": t["task_color"],
                             "hours":     hours,
                         })
+                        week_total += hours
 
             days.append({
                 "date":            str(actual_date),
