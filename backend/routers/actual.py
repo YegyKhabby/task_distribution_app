@@ -77,7 +77,16 @@ def _build_planned_week_rows(monday: date, week_start_offset: int) -> list[dict]
         "person_id, task_id, hours_per_week, preferred_days, valid_from, "
         "tasks(id, name, color, responsible_person, schedule_rule, is_fill, priority)"
     ).eq("week_number", wn).execute().data)
-    bulk_dist = active_distribution_rows(bulk_dist_raw, monday_str)
+    # active_distribution_rows picks the single latest valid_from version.
+    # Called across all people at once it would drop anyone whose distribution
+    # is older than the globally-newest run. Process per-person so each person
+    # gets their own latest version — matching the Calendar tab's behaviour.
+    _raw_by_pid: dict[str, list] = defaultdict(list)
+    for _r in bulk_dist_raw:
+        _raw_by_pid[_r["person_id"]].append(_r)
+    bulk_dist: list = []
+    for _rows in _raw_by_pid.values():
+        bulk_dist.extend(active_distribution_rows(_rows, monday_str))
 
     bulk_realloc = supabase_query(lambda: supabase.table("temporary_reallocations").select(
         "week_start_date, covering_person_id, task_id, hours, "
